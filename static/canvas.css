@@ -74,7 +74,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column}header{flex:n
 .tree-toggle{display:grid;place-items:center;padding:0;font:600 15px/1 monospace;background:#f3f7ef;border:1px solid #bccabf}
 .tree-contents[hidden]{display:none}
 
-/* Related cards share the position of their event. */
+/* Default placement before the canvas takes ownership of the related cards. */
 .spacecard.owncard.event-node{
   --relation-width:200px;--relation-gap:36px;
   background:#ffead5;border:2px solid #cd772e;color:#503723;overflow:visible
@@ -96,23 +96,24 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column}header{flex:n
   top:calc(100% + var(--relation-gap));left:0;width:100%;
   --wire:#bd7a38;--wash:rgb(255 226 195 / .80);--relation-text:#744a22
 }
-.event-relation::before,.event-relation::after{content:'';position:absolute;pointer-events:none}
-.event-relation.incoming::before,.event-relation.state-effects::before{
-  top:22px;width:var(--relation-gap);height:2px;background:var(--wire)
+.event-node.pinned-event{margin-left:0}
+.event-relation.free-relation{
+  right:auto;bottom:auto;width:200px;min-width:175px;
+  touch-action:none;user-select:none;cursor:grab;z-index:1
 }
-.event-relation.incoming::before{left:100%}.event-relation.state-effects::before{right:100%}
-.event-relation.incoming::after,.event-relation.state-effects::after{
-  top:18px;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:8px solid var(--wire)
-}
-.event-relation.incoming::after{left:calc(100% + var(--relation-gap) - 8px)}
-.event-relation.state-effects::after{right:100%}
-.event-relation.event-effects::before{bottom:100%;left:50%;height:var(--relation-gap);width:2px;background:var(--wire)}
-.event-relation.event-effects::after{
-  bottom:100%;left:calc(50% - 4px);border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid var(--wire)
-}
+.event-relation.free-relation.moving{z-index:4;cursor:grabbing}
+.event-relation .resize-grip{position:absolute}
+.wire-layer{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:0}
+#board:has(.wire-layer)>.spacecard{z-index:1}
+#board:has(.wire-layer)>.spacecard:hover,#board:has(.wire-layer)>.free-relation:hover{z-index:2}
+#board:has(.wire-layer)>.moving{z-index:4}
+.wire.incoming{color:#b34f54}.wire.state-effects{color:#4e82a7}.wire.event-effects{color:#bd7a38}
+.wire-line{fill:none;stroke:currentColor;stroke-width:2;stroke-linejoin:round}
+.wire-hit{fill:none;stroke:transparent;stroke-width:14;pointer-events:stroke;cursor:crosshair;touch-action:none}
+.wire-bend{fill:white;stroke:currentColor;stroke-width:2;pointer-events:all;cursor:grab;touch-action:none}
+.wire-bend:hover{fill:currentColor}
 .relation-heading{display:block;margin-bottom:5px;font-size:12px}
 .relation-row{display:flex;gap:5px;align-items:baseline}.relation-row+.relation-row{margin-top:4px}
-.relation-name,.remove-cause{background:transparent;border:0;color:inherit;padding:2px;text-align:left}
+.relation-name{background:transparent;border:0;color:inherit;padding:2px;text-align:left}
 .relation-name{flex:1;min-width:0;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
-.remove-cause{flex:none;font-size:16px;line-height:1}
-.relation-name:hover,.remove-cause:hover{background:#ffffff80}
+.relation-name:hover{background:#ffffff80}

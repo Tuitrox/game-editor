@@ -291,8 +291,6 @@ export function editEvent(owner,id,point=null,scope='local') {
 
     const emitter=event.scope==='global'?el('strong',{},'Глобальное событие'):
       el('div',{class:'emitter'},el('small',{},'Источник события'),el('p',{},ownerLabel(owner,event.ownerPath)));
-    if(!event.scope)emitter.append(visualTree('Выбрать размещение',{multiple:false,eligible:r=>r.at(-1)===owner,
-      apply:route=>{event.ownerPath=route;draw();}}),btn('Все размещения',()=>{event.ownerPath=null;draw();}));
     const form=el('form',{onsubmit:e=>{e.preventDefault();commit();}},...fields(event),emitter,
       el('h3',{},'Условия'),ruleBoard(event.conditions,'conditions',event,draw),
       el('h3',{},'Причины'),ruleBoard(event.causes,'causes',event,draw),

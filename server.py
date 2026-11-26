@@ -11,7 +11,7 @@ BASE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("DATA_DIR", BASE / "data"))
 DB = DATA / "editor.sqlite3"
 ASSETS = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
-          "/routes.js": ("routes.js", "text/javascript"), "/canvas.css": ("canvas.css", "text/css"), "/editor.js": ("editor.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
+          "/wires.js": ("wires.js", "text/javascript"), "/routes.js": ("routes.js", "text/javascript"), "/canvas.css": ("canvas.css", "text/css"), "/editor.js": ("editor.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
 
 
 def require(condition, message):
@@ -52,6 +52,19 @@ def validate(p):
             for width, height in layout.values():
                 require(175 <= width <= 10000 and 100 <= height <= 10000
                         and width % 5 == height % 5 == 0, "Неверный размер карточки")
+
+        for event_id, links in entities[key].get("eventLinks", {}).items():
+            require(event_id in events and isinstance(links, dict), "Неизвестное событие связи")
+            for role, link in links.items():
+                require(role in ("incoming", "state-effects", "event-effects") and isinstance(link, dict),
+                        "Неизвестный тип связи")
+                if "position" in link:
+                    coordinates({role: link["position"]}, [role])
+                if "size" in link:
+                    sizes_for({role: link["size"]}, [role])
+                bends = link.get("bends", [])
+                require(isinstance(bends, list), "Неверные точки стрелки")
+                coordinates(dict(enumerate(bends)), range(len(bends)))
 
         sizes_for(entities[key].get("sizes", {}), children)
         for kind, view in entities[key].get("views", {}).items():
@@ -200,6 +213,16 @@ class Handler(BaseHTTPRequestHandler):
             require(type(packet["version"]) is int, "Неверная версия")
             validate(packet["project"])
             with sqlite3.connect(DB) as db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute("SELECT body FROM project WHERE id=? AND version=?", (key, packet["version"])).fetchone()
+                if not row:
+                    return self.reply(409, {"error": "Проект изменился в другой вкладке. Обновите страницу."})
+                previous = json.loads(row[0])["events"]
+                for event_id, event in packet["project"]["events"].items():
+                    old = previous.get(event_id)
+                    if old and old.get("scope") != "global":
+                        require(all(old.get(field) == event.get(field) for field in ("owner", "ownerPath", "scope")),
+                                "Источник привязанного события изменить нельзя")
                 result = db.execute("UPDATE project SET body=?, version=version+1 WHERE id=? AND version=?",
                                     (json.dumps(packet["project"], ensure_ascii=False), key, packet["version"]))
                 if not result.rowcount:

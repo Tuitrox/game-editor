@@ -1,5 +1,6 @@
 import {editEvent, leaves, describeRule, removeCause, triggers, fullEvent, fullState} from './editor.js';
 
+import {wireLayer} from './wires.js';
 import {pathLabel} from './routes.js';
 const $ = s => document.querySelector(s);
 export function el(tag, props = {}, ...kids) {
@@ -19,7 +20,8 @@ export const entries = obj => Object.entries(obj);
 export const uid = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b=>b.toString(16).padStart(2,'0')).join('');
 export let p;
 let version, projectId, busy=false, path=['root'], tab='entities', picked=null;
-let stateCanvas=null;
+let stateCanvas=null, wires=null;
+const eventGroups=new Map();
 let clipboardDrag=null, loadSequence=0;
 const gridStep=5;
 const expandedCards=new Set();
@@ -118,6 +120,7 @@ export function deleteObj(type,id) {
   delete next[type][id];
   if(type!=='entities'){
     for(const entity of Object.values(next.entities)){
+      if(type==='events')delete entity.eventLinks?.[id];
       delete entity.layers?.[type]?.[id];delete entity.layerSizes?.[type]?.[id];
     }
   }
@@ -166,19 +169,28 @@ function clearPlacement(parent,id){
     delete layout.positions?.[id];delete layout.sizes?.[id];
   }
 }
-function prepareCard(card,id,kind){
+function pinGroup(next,id){
+  const parent=next.entities[here()],group=eventGroups.get(id);
+  const links=(parent.eventLinks??={})[id]??={};
+  const coords=node=>[node.offsetLeft,node.offsetTop].map(v=>Math.max(0,Math.round(v)));
+  setLayerPoint(next,here(),'events',id,coords(group.card));
+  for(const [role,panel] of group.panels)(links[role]??={}).position=coords(panel);
+  return links;
+}
+function prepareCard(card,id,kind,role=null){
   const parent=p.entities[here()];
-  const sizes=kind==='entities'?branchLayout(parent,tab).sizes:parent.layerSizes?.[kind];
-  if(sizes?.[id]){
-    card.style.width=sizes[id][0]+'px';card.style.minHeight=sizes[id][1]+'px';
+  const size=role?parent.eventLinks?.[id]?.[role]?.size:
+    (kind==='entities'?branchLayout(parent,tab).sizes:parent.layerSizes?.[kind])?.[id];
+  if(size){
+    card.style.width=size[0]+'px';card.style.minHeight=size[1]+'px';
   }
   for(const edge of ['n','e','s','w','nw','ne','sw','se']){
     const grip=el('span',{class:'resize-grip grip-'+edge,title:'Изменить размер'});
     grip.dataset.edge=edge;card.append(grip);
   }
-  enableCardDrag(card,id,kind);
+  enableCardDrag(card,id,kind,role);
 }
-function enableCardDrag(card,id,kind) {
+function enableCardDrag(card,id,kind,role) {
   let suppressClick=false;
   card.addEventListener('click',e=>{
     if(suppressClick && e.detail!==0){e.preventDefault();e.stopImmediatePropagation();}
@@ -187,7 +199,7 @@ function enableCardDrag(card,id,kind) {
     if(!e.isPrimary || e.button!==0)return;
     suppressClick=false;
     const resizing=e.target.closest('.resize-grip');
-    if(busy || (!resizing && e.target.closest('button,input,textarea,form,.child-list,.event-relation')))return;
+    if(busy || (!resizing && e.target.closest('button,input,textarea,form,.child-list')))return;
     const target=e.target;
     const start=[e.clientX,e.clientY], rect=card.getBoundingClientRect();
     const boardRect=$('#board').getBoundingClientRect();
@@ -208,7 +220,7 @@ function enableCardDrag(card,id,kind) {
         const dy=pointer.clientY-start[1]+boardRect.top-canvas.top;
         let width=snap(rect.width+(edge.includes('e')?dx:edge.includes('w')?-dx:0));
         if(edge.includes('w'))width=Math.min(width,snap(fixedRight));
-        width=Math.max(220,Math.min(10000,width));
+        width=Math.max(role?175:220,Math.min(10000,width));
         card.style.width=width+'px';
         card.style.minHeight='0px';
         const naturalHeight=Math.ceil(card.getBoundingClientRect().height/gridStep)*gridStep;
@@ -221,6 +233,7 @@ function enableCardDrag(card,id,kind) {
           edge.includes('n')?Math.max(0,snap(fixedBottom-height)):origin[1]];
         positionCard(card,position);
       }else positionCard(card,pointFor(pointer,offset));
+      wires?.refresh(card);
     }
     function scrollAtEdge(){
       if(!card.isConnected){finish(false);return;}
@@ -234,13 +247,17 @@ function enableCardDrag(card,id,kind) {
       if(target.hasPointerCapture(e.pointerId))target.releasePointerCapture(e.pointerId);
       if(!moving)return;
       card.classList.remove('moving');
-      const rollback=()=>{[card.style.left,card.style.top,card.style.width,card.style.minHeight]=previous;};
+      const rollback=()=>{[card.style.left,card.style.top,card.style.width,card.style.minHeight]=previous;wires?.refresh(card);};
       if(!commit || !card.isConnected || busy){rollback();return;}
       const point=pointFor(pointer,offset);
       update();
       const next=structuredClone(p),parent=next.entities[here()];
       const finalPoint=resizing?position:point;
-      if(kind==='entities'){
+      if(kind==='events'){
+        const links=pinGroup(next,id);
+        if(size && role)links[role].size=size;
+        if(size && !role)((parent.layerSizes??={}).events??={})[id]=size;
+      }else if(kind==='entities'){
         const layout=branchLayout(parent,tab);
         (layout.positions??={})[id]=finalPoint;
         if(size)(layout.sizes??={})[id]=size;
@@ -489,8 +506,9 @@ function eventLinks(card,id,event){
   const sources=new Set(leaves(event.causes).map(node=>node.ref));
   const destinations=outbound(id);
   function panel(kind,title,rows){
-    card.append(el('section',{class:'event-relation '+kind,ariaLabel:title},
-      el('strong',{class:'relation-heading'},title),...rows));
+    const panel=el('section',{class:'event-relation '+kind,ariaLabel:title},
+      el('strong',{class:'relation-heading'},title),...rows);
+    panel.dataset.role=kind;card.append(panel);
   }
   function nameLink(key){
     const link=btn(p.events[key].name,()=>eventDetail(key),'relation-name');
@@ -500,12 +518,7 @@ function eventLinks(card,id,event){
     card.classList.add('has-causes');
     const positive=new Set(triggers(event.causes));
     panel('incoming','Причины',Array.from(sources,source=>{
-      const remove=btn('×',()=>{
-        if(busy)return;
-        const next=structuredClone(p);removeCause(next.events[id].causes,source);save(next);
-      },'remove-cause');
-      remove.setAttribute('aria-label','Убрать причину «'+p.events[source].name+'»');
-      return el('div',{class:'relation-row'},positive.has(source)?null:el('small',{},'НЕ'),nameLink(source),remove);
+      return el('div',{class:'relation-row'},positive.has(source)?null:el('small',{},'НЕ'),nameLink(source));
     }));
   }
   if(event.effects.length)panel('state-effects','Смена состояний',event.effects.map((s,i)=>{
@@ -572,7 +585,9 @@ function renderEventBoard(board,cards){
   for(const [id,event] of entries(p.events)){
     if(!eventInBranch(event,path))continue;
     const point=positions[id] || [0,0];
-    cards.push({point,auto:!positions[id],card:objectCard(id,event,point)});
+    const card=objectCard(id,event,point);
+    if(p.entities[here()].eventLinks?.[id])card.classList.add('pinned-event');
+    cards.push({id,point,auto:!positions[id],card});
   }
   board.replaceChildren(...cards.map(item=>item.card));
   const origin=board.getBoundingClientRect(), occupied=[];
@@ -583,7 +598,28 @@ function renderEventBoard(board,cards){
     return {x:left,y:top,w:Math.ceil(Math.max(...boxes.map(b=>b.right))-origin.left-left),
       h:Math.ceil(Math.max(...boxes.map(b=>b.bottom))-origin.top-top)};
   }
-  for(const item of cards.filter(item=>!item.auto))occupied.push(footprint(item));
+  function detachPanels(item){
+    const {id,card}=item;if(!id)return;
+    const saved=p.entities[here()].eventLinks?.[id] || {};
+    const panes=[...card.querySelectorAll('.event-relation')];
+    const panels=new Map();
+    // Measure all three defaults while the panels still use the event as their containing block.
+    const defaults=panes.map(panel=>{
+      const r=panel.getBoundingClientRect();return [r.left-origin.left,r.top-origin.top];
+    });
+    panes.forEach((panel,i)=>{
+      const role=panel.dataset.role,layout=saved[role] || {};
+      panel.classList.add('free-relation');
+      board.append(panel);positionCard(panel,layout.position || defaults[i].map(v=>Math.max(0,Math.round(v))));
+      prepareCard(panel,id,'events',role);panels.set(role,panel);
+    });
+    eventGroups.set(id,{card,panels});
+  }
+  for(const item of cards.filter(item=>!item.auto)){
+    detachPanels(item);
+    occupied.push(footprint(item));
+    for(const panel of eventGroups.get(item.id)?.panels.values() || [])occupied.push(footprint({card:panel}));
+  }
   const viewWidth=$('#content').clientWidth;
   for(const item of cards.filter(item=>item.auto)){
     const box=footprint(item);let x=25,y=25;
@@ -594,14 +630,30 @@ function renderEventBoard(board,cards){
       if(right+box.w<=viewWidth){x=right;continue;}
       y=5*Math.ceil(Math.min(...hits.map(b=>b.y+b.h+25))/5);x=25;
     }
-    positionCard(item.card,[x,y]);occupied.push({x,y,w:box.w,h:box.h});
+    positionCard(item.card,[x,y]);detachPanels(item);occupied.push({x,y,w:box.w,h:box.h});
   }
   let width=Math.max(1200,viewWidth+480),height=Math.max(900,$('#content').clientHeight+300);
   for(const b of occupied){width=Math.max(width,b.x+b.w+200);height=Math.max(height,b.y+b.h+200);}
   board.style.width=width+'px';board.style.height=height+'px';
+  wires=wireLayer(board);
+  for(const [id,{card,panels}] of eventGroups){
+    for(const [role,panel] of panels){
+      const incoming=role==='incoming';
+      const bends=p.entities[here()].eventLinks?.[id]?.[role]?.bends || [];
+      for(const [x,y] of bends){width=Math.max(width,x+100);height=Math.max(height,y+100);}
+      wires.connect(incoming?panel:card,incoming?card:panel,role,bends,points=>{
+        if(busy)return;
+        const next=structuredClone(p);
+        pinGroup(next,id)[role].bends=structuredClone(points);
+        return save(next);
+      },()=>busy);
+    }
+  }
+  board.style.width=width+'px';board.style.height=height+'px';
   if(!cards.length)board.append(el('div',{class:'boardhint'},'Двойной щелчок по холсту создаст событие.'));
 }
 function render() {
+  wires?.dispose();wires=null;eventGroups.clear();
   const id=here(),entity=p.entities[id];
   const current=stateCanvas?p.states[stateCanvas]:entity;
   const header=$('.context>div');
@@ -652,6 +704,7 @@ function newProject(){
   }},...fields(draft),footer(submit)));
 }
 async function route(){
+  wires?.dispose();wires=null;eventGroups.clear();
   const ticket=++loadSequence, id=location.hash.match(/^#project\/([1-9]\d*)$/)?.[1];
   expandedCards.clear();
   if($('dialog').open)$('dialog').close();
