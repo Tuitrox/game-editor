@@ -1,4 +1,4 @@
-import {parameterTest} from './parameters.js';
+import {parameterTest,changeDirections} from './parameters.js';
 
 // Event and state IDs belong to separate pools. References always use the same
 // typed key, even when several rules point at the same external object.
@@ -16,8 +16,8 @@ export function projectGraph(project, path, inBranch) {
     }
   }
   const visible = new Set(locals);
-  function link(from, to, role, label, statePath, negated = false) {
-    const stateKey = role === 'condition' ? from : role === 'effect' ? to : null;
+  function link(from, to, role, label, statePath, negated = false, caption) {
+    const stateKey = role === 'effect' ? to : from;
     const local = key => locals.has(key) && (root || key !== stateKey || !statePath ||
       inBranch({owner:nodes.get(key).obj.owner, ownerPath:statePath}, path));
     if (!local(from) && !local(to)) return;
@@ -27,6 +27,21 @@ export function projectGraph(project, path, inBranch) {
     if (!edges.has(key)) edges.set(key, {key, from, to, role:wireRole, labels:[]});
     const edge = edges.get(key);
     if (!edge.labels.includes(label)) edge.labels.push(label);
+    if(caption){
+      edge.captions??=[];
+      if(!edge.captions.includes(caption))edge.captions.push(caption);
+    }
+  }
+  function parameterKey(leaf){
+    const key='parameters:'+leaf.owner+':'+leaf.ref;
+    if(!nodes.has(key)){
+      const obj={...project.entities[leaf.owner].parameters[leaf.ref],owner:leaf.owner};
+      nodes.set(key,{key,id:leaf.ref,kind:'parameters',obj,external:true});
+    }
+    if(root || inBranch({owner:leaf.owner,ownerPath:leaf.path},path)){
+      nodes.get(key).external=false;locals.add(key);
+    }
+    return key;
   }
   function walk(rule, apply, trail = [], inheritedNegation = false) {
     const names = {and:'И', or:'ИЛИ', not:'НЕ', all:'Все из', any:'Любой из'};
@@ -39,23 +54,23 @@ export function projectGraph(project, path, inBranch) {
   }
   for (const [id, e] of Object.entries(project.events)) {
     const event = 'events:' + id;
-    walk(e.causes, (leaf, label, negated) =>
-      link('events:'+leaf.ref, event, 'cause', 'Причина · '+label, undefined, negated));
+    walk(e.causes, (leaf, label, negated) => {
+      if(leaf.op==='change'){
+        const caption=changeDirections[leaf.direction];
+        link(parameterKey(leaf),event,'cause',[label,caption].filter(Boolean).join(' › '),leaf.path,negated,caption);
+      }else link('events:'+leaf.ref, event, 'cause', 'Причина · '+label, undefined, negated);
+    });
     walk(e.conditions, (leaf, label, negated) => {
       if (leaf.op === 'parameter') {
-        const key = 'parameters:' + leaf.owner + ':' + leaf.ref;
-        const obj = {...project.entities[leaf.owner].parameters[leaf.ref], owner:leaf.owner};
-        const local = root || inBranch({owner:leaf.owner, ownerPath:leaf.path}, path);
-        if (!nodes.has(key)) nodes.set(key,{key,id:leaf.ref,kind:'parameters',obj,external:true});
-        if (local) {
-          nodes.get(key).external = false;
-          locals.add(key);
-        }
-        link(key, event, 'condition', [label,parameterTest(project,leaf)].filter(Boolean).join(' › '), leaf.path, negated);
+        link(parameterKey(leaf), event, 'condition', [label,parameterTest(project,leaf)].filter(Boolean).join(' › '), leaf.path, negated);
       } else leaf.refs.forEach((ref,i) =>
         link('states:'+ref, event, 'condition', 'Условие · '+label, leaf.paths?.[i], negated));
     });
     e.effects.forEach((ref,i) => link(event, 'states:'+ref, 'effect', 'Устанавливает состояние', e.effectPaths?.[i]));
+    for(const change of e.parameterEffects || []){
+      const caption=changeDirections[change.direction];
+      link(event,parameterKey(change),'effect',caption,change.path,false,caption);
+    }
   }
   // Keep existing hand-edited bends. Only a second polarity needs a new layout key.
   for (const edge of edges.values()) {
@@ -193,12 +208,17 @@ export function layoutGraph(graph, sizes) {
     }
   }
   const slots = new Map(), positions = new Map(), segments = new Map(), gaps = new Map();
+  const captionWidths=new Map();
   function reserve(col) {
     const lane = gaps.get(col) || 0;
     gaps.set(col,lane+1); return {col,lane};
   }
   for (const e of graph.edges) {
     const path = paths.get(e.key);
+    if(e.captions){
+      const col=rank.get(e.from);
+      captionWidths.set(col,Math.max(captionWidths.get(col) || 0,e.captions.join(' / ').length*7));
+    }
     segments.set(e.key,path ? path.slice(1).map((_,i)=>reserve(rank.get(e.from)+i)) :
       [reserve(rank.get(e.from)),reserve(rank.get(e.to)-1)]);
   }
@@ -213,8 +233,9 @@ export function layoutGraph(graph, sizes) {
       if (sizes.has(k)) positions.set(k,[x,y]);
       y += h + (w ? 42 : 14); width = Math.max(width,w);
     }
-    gapX.set(i, x+width+22);
-    x += width+56+(gaps.get(i)||0)*12;
+    const captionWidth=captionWidths.get(i) || 0;
+    gapX.set(i, x+width+22+captionWidth);
+    x += width+56+captionWidth+(gaps.get(i)||0)*12;
   }
   const ports = new Map();
   function distribute(key, list, side) {

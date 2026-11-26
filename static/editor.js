@@ -1,21 +1,23 @@
 import {p,el,btn,option,label,entries,uid,modal,fields,footer,save,deleteObj,outbound,eventDetail,stateDetail,notice,currentOwnerPath} from './app.js';
 
 import {pathLabel} from './routes.js';
-import {parameterTypes, parameterTest, comparisons} from './parameters.js';
+import {parameterTypes, parameterTest, comparisons, changeDirections, changeText} from './parameters.js';
 
 export const newGroup = ()=>({op:'and',neg:false,items:[]});
 export const leaves = n => n.items ? n.items.flatMap(leaves) : [n];
+export const parameterRefs = e => [...leaves(e.conditions).filter(n=>n.op==='parameter'),
+  ...leaves(e.causes).filter(n=>n.op==='change'),...(e.parameterEffects || [])];
 
 export function triggers(node, negative=false) {
   const negated = (negative !== node.neg) !== (node.op==='not');
   if(node.items)return node.items.flatMap(child=>triggers(child,negated));
-  return negated ? [] : [node.ref];
+  return !negated && node.op==='event' ? [node.ref] : [];
 }
 export function removeCause(node,id,positiveOnly=false,negative=false) {
   const negated=(negative !== node.neg) !== (node.op==='not');
   for(const child of node.items) if(child.items) removeCause(child,id,positiveOnly,negated);
   node.items=node.items.filter(child=>child.items?child.items.length:
-    child.ref!==id || (positiveOnly && (negated !== child.neg)));
+    child.op!=='event' || child.ref!==id || (positiveOnly && (negated !== child.neg)));
 }
 function addCause(target,id) {
   const group=target.causes, leaf={op:'event',neg:false,ref:id};
@@ -69,6 +71,7 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
       }else row=el('span',{class:'tree-node'},name);
       const contents=el('div',{class:'tree-contents'}),trail=[...ancestors,addr];
       if(stateMode || parameterMode)for(const [id,s] of parameterMode?entries(entity.parameters || {}):statesOf(key)){
+        if(parameterMode==='number' && (s.type || 'number')!=='number')continue;
         const pick=btn('',()=>apply(route,id),'tree-state');pick.append('→ ',record(s.name,trail));contents.append(pick);
       }
       for(const [id,event] of eventsByOwner.get(key) || []){
@@ -95,6 +98,10 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
     const nested=new Set(Object.values(p.entities).flatMap(e=>e.children));
     const roots=Object.keys(p.entities).filter(id=>!nested.has(id));
     const tree=el('ul',{class:'project-tree'},roots.map(id=>branch([id])));
+    if(parameterMode==='number' && !tree.querySelector('.tree-state')){
+      wrap.replaceChildren(el('p',{class:'empty'},'В проекте пока нет числовых параметров. Добавьте параметр типа «Число» на холсте сущности.'));
+      return;
+    }
     function highlight(){
       const query=search.value.trim().toLocaleLowerCase();let matches=0;
       const reveal=new Set();
@@ -199,6 +206,7 @@ export function describeRule(n,event) {
   if(n.neg)return ruleGroup('not',[describeRule({...n,neg:false},event)]);
   if(n.items)return ruleGroup(n.op,n.items.map(child=>describeRule(child,event)));
   if(n.op==='event')return ruleReference('event',n.ref);
+  if(n.op==='change')return changeReference(n);
   if(n.op==='parameter')return el('span',{class:'rule-ref ref-parameter'},ownerLabel(n.owner,n.path)+' → '+parameterTest(p,n));
   if(n.op==='self')return n.refs.length?ruleReference('state',n.refs[0],event.ownerPath):
     el('span',{class:'rule-ref ref-state'},p.entities[event.owner].name+' → Любое состояние');
@@ -218,6 +226,19 @@ function normalizeNegations(node){
     return {...child,neg:node.neg?child.neg:!child.neg};
   }
   return node.neg?{op:'not',neg:false,items:[clean]}:clean;
+}
+export function changeReference(node){
+  return el('span',{class:'rule-ref ref-parameter'},ownerLabel(node.owner,node.path)+' → '+changeText(p,node));
+}
+function changePicker(caption,apply,open=false){
+  return visualTree(caption,{multiple:false,eligible:()=>false,parameterMode:'number',open,
+    apply:(path,ref)=>apply({owner:path.at(-1),path,ref})});
+}
+function changeFields(change,draw){
+  const direction=selector(entries(changeDirections),change.direction,v=>{change.direction=v;});
+  direction.ariaLabel='Направление изменения';
+  return el('div',{},el('p',{class:'rule-ref ref-parameter'},ownerLabel(change.owner,change.path)+' → '+p.entities[change.owner].parameters[change.ref].name),
+    direction,changePicker('Сменить параметр',target=>{Object.assign(change,target);draw();}));
 }
 function parameterFields(node){
   const param=p.entities[node.owner].parameters[node.ref], type=param.type || 'number';
@@ -270,7 +291,7 @@ function ruleBoard(root,kind,event,draw){
     Object.assign(node,{owner,ref,path});
   }
   function addLeaf(parent,leafType){
-    const caption={event:'Выбрать событие-причину',state:'Выбрать состояние',parameter:'Выбрать параметр'}[leafType];
+    const caption={event:'Выбрать событие-причину',state:'Выбрать состояние',parameter:'Выбрать параметр',change:'Выбрать изменение параметра'}[leafType];
     function insert(child){
       parent.items.push(child);draw();
     }
@@ -280,6 +301,8 @@ function ruleBoard(root,kind,event,draw){
       e.currentTarget.parentElement.after(panel);
       if(leafType==='event'){
         panel.append(eventPicker(caption,id=>insert({op:'event',neg:false,ref:id}),()=>true,true));
+      }else if(leafType==='change'){
+        panel.append(changePicker(caption,target=>insert({op:'change',neg:false,direction:'up',...target}),true));
       }else if(leafType==='parameter'){
         pickParameter(panel,(owner,ref,path)=>{
           const child={op:'parameter',neg:false};
@@ -298,7 +321,7 @@ function ruleBoard(root,kind,event,draw){
             insert({op:mode.value,neg:false,refs:routes.map(()=>''),paths:routes});
           }}));
       }
-    }},{event:'+ Событие',state:'+ Состояние',parameter:'+ Параметр'}[leafType]);
+    }},{event:'+ Событие',state:'+ Состояние',parameter:'+ Параметр',change:'+ Параметр'}[leafType]);
   }
   function slot(parent,index){
     const zone=el('div',{class:'rule-slot drop-only'});
@@ -340,6 +363,7 @@ function ruleBoard(root,kind,event,draw){
       if(node.items.length<2 && node.op!=='not')shell.classList.add('single-rule');
       shell.prepend(el('div',{class:'operator-rail'},operator));
     }
+    else if(node.op==='change')head.append(el('strong',{},'Изменение параметра'));
     else if(node.op==='parameter')head.append(el('strong',{},'Параметр · '+parameterTypes[p.entities[node.owner].parameters[node.ref].type || 'number']));
     else if(kind==='conditions' && node.op!=='self'){
       shell.classList.add('tone-'+node.op);
@@ -358,9 +382,10 @@ function ruleBoard(root,kind,event,draw){
       shell.append(slot(node,node.items.length));
       if(node.op==='not' && node.items.length)return shell;
       const append=child=>{node.items.push(child);draw();};
-      const leafTypes=kind==='causes'?['event']:['state','parameter'];
+      const leafTypes=kind==='causes'?['event','change']:['state','parameter'];
       shell.append(el('div',{class:'addrow'},...leafTypes.map(type=>addLeaf(node,type)),...['and','or','not'].map(op=>btn('+ '+words[op],()=>append({op,neg:false,items:[]})))));
-    }else if(kind==='causes'){
+    }else if(node.op==='change')shell.append(changeFields(node,draw));
+    else if(kind==='causes'){
       shell.append(el('p',{class:'rule-ref ref-event'},fullEvent(node.ref)),eventPicker('Сменить событие',id=>{node.ref=id;draw();}));
     }else if(node.op==='parameter'){
       shell.append(parameterFields(node),btn('Сменить параметр',()=>{
@@ -415,6 +440,8 @@ export function editEvent(owner,id=null,scope='local') {
     }
     const scroll=document.querySelector('dialog').scrollTop;
     const effects=el('div',{class:'effects'});
+    for(const [index,change] of (event.parameterEffects || []).entries())effects.append(el('div',{class:'effectline'},
+      changeFields(change,draw),btn('Убрать',()=>{event.parameterEffects.splice(index,1);draw();},'unlink')));
     for(const [index,state] of event.effects.entries())effects.append(el('div',{class:'effectline'},
       el('span',{class:'rule-ref ref-state'},fullState(state,event.effectPaths[index])),
       btn('Убрать',()=>{event.effects.splice(index,1);event.effectPaths.splice(index,1);draw();},'unlink')));
@@ -427,6 +454,7 @@ export function editEvent(owner,id=null,scope='local') {
       el('h3',{},'Условия'),ruleBoard(event.conditions,'conditions',event,draw),
       el('h3',{},'Причины'),ruleBoard(event.causes,'causes',event,draw),
       el('h3',{},'Последствия'),effects,
+      changePicker('＋ Изменение параметра',target=>{(event.parameterEffects??=[]).push({...target,direction:'up'});draw();}),
       visualTree('＋ Смена состояния',{multiple:false,stateMode:true,eligible:()=>true,apply:(route,key)=>{event.effects.push(key);event.effectPaths.push(route);draw();}}),
       eventPicker('＋ Событие',id=>{outgoing.add(id);draw();},id=>id!==key && !outgoing.has(id)),
       footer(id?btn('Удалить событие',()=>deleteObj('events',id),'danger'):null,el('button',{class:'primary',type:'submit'},'Сохранить правило')));

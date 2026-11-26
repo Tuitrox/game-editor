@@ -1,9 +1,9 @@
-import {editEvent, leaves, describeRule, removeCause, triggers, ruleReference} from './editor.js';
+import {editEvent, leaves, describeRule, removeCause, triggers, ruleReference, parameterRefs, changeReference} from './editor.js';
 
 import {projectGraph, layoutGraph, upstream} from './graph.js';
 import {wireLayer} from './wires.js';
 import {entityRoutes, pathLabel} from './routes.js';
-import {parameterTypes, parameterTest} from './parameters.js';
+import {parameterTypes, parameterTest, changeText} from './parameters.js';
 const $ = s => document.querySelector(s);
 export function el(tag, props = {}, ...kids) {
   const node = document.createElement(tag);
@@ -115,15 +115,14 @@ function topology(project) {
   return JSON.stringify([
     entries(project.entities).map(([id,e])=>[id,e.children]),
     entries(project.states).map(([id,s])=>[id,s.owner]),
-    entries(project.events).map(([id,e])=>[id,e.owner,e.ownerPath,e.scope,e.causes,e.conditions,e.effects,e.effectPaths])
+    entries(project.events).map(([id,e])=>[id,e.owner,e.ownerPath,e.scope,e.causes,e.conditions,e.effects,e.effectPaths,e.parameterEffects])
   ]);
 }
 export async function save(next, after, {undo=false}={}) {
   if (busy) return;
   // Hand edits belong to this topology. Rebuild after nodes or logical links change.
   if (!undo && next.graphLayouts && topology(p)!==topology(next)) {
-    const usedParameters=new Set(Object.values(next.events).flatMap(e=>leaves(e.conditions)
-      .filter(n=>n.op==='parameter').map(n=>'parameters:'+n.owner+':'+n.ref)));
+    const usedParameters=new Set(Object.values(next.events).flatMap(e=>parameterRefs(e).map(n=>'parameters:'+n.owner+':'+n.ref)));
     for(const [route,layout] of entries(next.graphLayouts)){
       const chain=route.split('/');
       const valid=chain.every((id,i)=>Object.hasOwn(next.entities,id) &&
@@ -220,7 +219,7 @@ function entityDraftForm(){
 export function deleteObj(type,id) {
   const next=structuredClone(p), obj=next[type][id];
   if(type==='entities' && (count(p.events,id)||count(p.states,id))) return notice('Сначала удалите собственные состояния и события этой сущности.');
-  if(type==='entities' && Object.values(p.events).some(e=>leaves(e.conditions).some(n=>n.op==='parameter' && n.owner===id)))return notice('Параметры сущности используются в правилах.');
+  if(type==='entities' && Object.values(p.events).some(e=>parameterRefs(e).some(n=>n.owner===id)))return notice('Параметры сущности используются в правилах.');
   if(type==='states' && entries(p.events).some(([,e])=>e.effects.includes(id)||leaves(e.conditions).some(n=>n.refs?.includes(id)))) return notice('Состояние используется в правилах. Сначала измените связанные события.');
   if(!confirm('Удалить «'+obj.name+'»'+(type==='entities'?' из пула и всех вложений':'')+'?')) return;
   delete next[type][id];
@@ -403,7 +402,8 @@ function eventDetail(id) {
   const targets=outbound(id);
   modal(e.name,...(e.desc?[el('p',{},e.desc)]:[]),
     el('h3',{},'Условия'),describeRule(e.conditions,e),el('h3',{},'Причины'),describeRule(e.causes,e),
-    el('h3',{},'Последствия'),e.effects.length+targets.length?el('div',{class:'rule-children'},
+    el('h3',{},'Последствия'),e.effects.length+targets.length+(e.parameterEffects?.length || 0)?el('div',{class:'rule-children'},
+      ...(e.parameterEffects || []).map(changeReference),
       ...e.effects.map((s,i)=>ruleReference('state',s,e.effectPaths?.[i])),
       ...targets.map(k=>ruleReference('event',k))):blank('Последствий пока нет'),
     footer(btn('Редактировать правило',()=>editEvent(e.owner,id),'primary')));
@@ -428,6 +428,9 @@ function showRelations() {
   for(const [id,event] of entries(p.events)){
     const emitter=[event.owner,event.ownerPath];
     for(const n of leaves(event.causes)){
+      if(n.op==='change'){
+        add([n.owner,n.path],emitter,id,changeText(p,n)+' · причина «'+event.name+'»');continue;
+      }
       const source=p.events[n.ref];
       add([source.owner,source.ownerPath],emitter,id,source.name+' · в причинах «'+event.name+'»');
     }
@@ -436,6 +439,7 @@ function showRelations() {
       else n.refs.forEach((s,i)=>add([p.states[s].owner,n.paths?.[i]],emitter,id,p.states[s].name+' · условие для «'+event.name+'»'));
     }
     event.effects.forEach((s,i)=>add(emitter,[p.states[s].owner,event.effectPaths?.[i]],id,event.name+' → '+p.states[s].name));
+    for(const change of event.parameterEffects || [])add(emitter,[change.owner,change.path],id,event.name+' → '+changeText(p,change));
   }
   modal('Связи систем',...(edges.size?[...edges.values()].map(edge=>
     el('details',{class:'relation'},el('summary',{},edge.name),...edge.rules,...edge.links)):[blank('Между сущностями в этом разделе пока нет связей.')]));
@@ -542,8 +546,8 @@ function entityParameters(owner){
     const name=el('input',{name:'name',value:param.name,required:true,placeholder:'Например, HP'});
     const type=el('select',{name:'type'},...entries(parameterTypes).map(([k,v])=>option(k,v)));
     type.value=param.type || 'number';
-    const usedBy=id && Object.values(p.events).find(e=>leaves(e.conditions).some(n=>n.op==='parameter' && n.owner===owner && n.ref===id));
-    const inUse=()=>notice('Параметр используется в условиях события «'+usedBy.name+'». Сначала измените условие.');
+    const usedBy=id && Object.values(p.events).find(e=>parameterRefs(e).some(n=>n.owner===owner && n.ref===id));
+    const inUse=()=>notice('Параметр используется в событии «'+usedBy.name+'». Сначала измените правило.');
     const cancel=()=>{show();section.querySelector('.parameter-heading button').focus();};
     const editor=el('form',{class:'parameter-form',onsubmit:e=>{
       e.preventDefault();
@@ -823,7 +827,7 @@ function renderEventBoard(board){
       const next=structuredClone(p);
       graphLayout(next).bends[e.key]=structuredClone(edited);
       return save(next);
-    },()=>busy,port,e.labels.join(' / '));
+    },()=>busy,port,e.labels.join(' / '),e.captions?.join(' / '));
     line.dataset.key=e.key;lines.set(e.key,line);
   }
   board.style.width=width+'px';board.style.height=height+'px';

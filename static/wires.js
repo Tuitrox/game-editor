@@ -23,7 +23,7 @@ export function wireLayer(board,gridStep){
   const observer=new ResizeObserver(entries=>{
     for(const update of new Set(entries.flatMap(({target})=>updates.get(target) || [])))update();
   });
-  function connect(start,end,role,initial,commit,locked,port,description){
+  function connect(start,end,role,initial,commit,locked,port,description,caption){
     const group=svg('g',{class:'wire '+role});
     const markerId='wire-arrow-'+role;
     if(!defs.querySelector('#'+markerId)){
@@ -33,6 +33,8 @@ export function wireLayer(board,gridStep){
     const line=svg('polyline',{class:'wire-line','marker-end':'url(#'+markerId+')'});
     const hit=svg('polyline',{class:'wire-hit'}), handles=svg('g');
     const title=svg('title');title.textContent=description;group.append(title,line,hit,handles);layer.append(group);
+    const label=caption && svg('text',{class:'wire-caption','text-anchor':'middle'});
+    if(label){label.textContent=caption;group.insertBefore(label,handles);}
     let bends=structuredClone(initial), vertices=[],gesture=null;
     function location(event){
       const r=board.getBoundingClientRect();
@@ -50,6 +52,16 @@ export function wireLayer(board,gridStep){
         [b.x, Math.round(b.y+b.h*port.end)]];
       const coords=vertices.map(p=>p.join(',')).join(' ');
       hit.setAttribute('points',coords);line.setAttribute('points',coords);
+      if(label){
+        let longest=-1;
+        for(let i=1;i<vertices.length;i++){
+          const [x,y]=vertices[i-1],[endX,endY]=vertices[i];
+          const span=Math.abs(endX-x);
+          if(span<=longest)continue;
+          longest=span;
+          label.setAttribute('x',(x+endX)/2);label.setAttribute('y',(y+endY)/2-4);
+        }
+      }
       while(handles.childElementCount>bends.length)handles.lastElementChild.remove();
       bends.forEach(([x,y],i)=>{
         let handle=handles.children[i];

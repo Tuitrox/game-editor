@@ -112,6 +112,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column}header{flex:n
 #board:has(.wire-layer)>.moving{z-index:4}
 .wire.incoming{color:#b34f54}.wire.state-effects{color:#4e82a7}.wire.event-effects{color:#bd7a38}
 .wire-line{fill:none;stroke:currentColor;stroke-width:2;stroke-linejoin:round}
+.wire-caption{fill:currentColor;font:600 11px "Segoe UI",sans-serif;stroke:#f6f8f3;stroke-width:3px;paint-order:stroke;pointer-events:none}
 .wire-hit{fill:none;stroke:transparent;stroke-width:14;pointer-events:stroke;cursor:crosshair;touch-action:none}
 .wire-bend{fill:white;stroke:currentColor;stroke-width:2;pointer-events:all;cursor:grab;touch-action:none}
 .wire-bend:hover{fill:currentColor}

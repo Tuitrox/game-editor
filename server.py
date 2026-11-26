@@ -136,6 +136,16 @@ def validate(p):
             check_path(path, states[key]["owner"])
         return paths
 
+    def parameter_type(node):
+        owner, ref = node["owner"], node["ref"]
+        require(owner in entities and ref in entities[owner].get("parameters", {}), "Неизвестный параметр")
+        check_path(node.get("path"), owner)
+        return entities[owner]["parameters"][ref].get("type", "number")
+
+    def check_change(node):
+        require(parameter_type(node) == "number", "Выберите числовой параметр")
+        require(node["direction"] in ("up", "down"), "Выберите направление изменения")
+
     def rule(node, kind, event, outer=False):
         require(type(node["neg"]) is bool, "Неверное отрицание")
         op = node["op"]
@@ -148,14 +158,13 @@ def validate(p):
                 rule(child, kind, event)
         elif kind == "causes" and op == "event":
             require(node["ref"] in events, "Выберите событие")
+        elif kind == "causes" and op == "change":
+            check_change(node)
         elif kind == "conditions" and op == "parameter":
-            owner, ref = node["owner"], node["ref"]
-            require(owner in entities and ref in entities[owner].get("parameters", {}), "Неизвестный параметр")
-            check_path(node.get("path"), owner)
+            param_type = parameter_type(node)
             if event.get("scope") == "local":
-                require(owner == event["owner"] and node.get("path") == event.get("ownerPath"),
+                require(node["owner"] == event["owner"] and node.get("path") == event.get("ownerPath"),
                         "Выберите параметр источника события")
-            param_type = entities[owner]["parameters"][ref].get("type", "number")
             value, compare = node["value"], node["compare"]
             if param_type == "number":
                 require(compare in ("lt", "le", "eq", "ge", "gt"), "Выберите знак сравнения")
@@ -193,6 +202,10 @@ def validate(p):
         require(isinstance(event["effects"], list) and all(i in states for i in event["effects"]),
                 "Выберите состояние последствия")
         paths_for(event, "effectPaths", event["effects"])
+        changes = event.get("parameterEffects", [])
+        require(isinstance(changes, list), "Неверный список изменений параметров")
+        for change in changes:
+            check_change(change)
 
 
 class Handler(BaseHTTPRequestHandler):
