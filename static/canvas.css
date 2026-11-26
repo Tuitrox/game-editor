@@ -188,6 +188,12 @@ button.rule-ref:hover{text-decoration:underline}
 .entity-row .tree-section:hover,.entity-row .tree-action:hover{background:#e3ebe2}
 .tree-attach{font-size:12px}.entity-row.drop-target,#board.entity-map.drop-target{outline:2px dashed #487553;outline-offset:-2px}
 .tree-empty{margin:0;padding:20px;color:#53695b}
+.entity-draft{display:grid;gap:8px;max-width:500px;margin:0 0 12px;padding:12px 14px;background:white;color:#254238;border:1px solid #bccdbc;border-radius:8px}
+.entity-tree .entity-draft{margin:0 10px 10px 38px}
+.entity-draft .field,.entity-draft .footer{margin:0}
+.entity-draft .field input,.entity-draft .field textarea{box-sizing:border-box;width:100%;min-width:0}
+.entity-draft .footer{display:flex;gap:6px;justify-content:flex-end}
+#poolDraft .entity-draft{padding:9px;margin:8px 0}
 @media(max-width:680px){
   .entity-tree li>ul{margin-left:12px;margin-right:0;padding-left:7px}
   .entity-tree li>ul>li::before{left:-7px;width:7px}

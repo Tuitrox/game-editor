@@ -22,7 +22,10 @@ export const uid = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), 
 export let p;
 let version, projectId, busy=false, path=['root'], tab='entities', picked=null;
 let stateCanvas=null, wires=null;
-let selectedNode=null;
+let selectedNode=null, entityDraft=null;
+const backStack=[];
+const undoStack=[];
+const undoLimit=50;
 const graphViewKey=()=>path.join('/');
 function graphLayout(project) {
   return ((project.graphLayouts??={})[graphViewKey()]??={positions:{}, sizes:{}, bends:{}});
@@ -58,14 +61,41 @@ function eventInBranch(event,branch){
   if(index<0)return descendants(branch.at(-1)).has(anchor);
   return branch.slice(index).every((key,i)=>event.ownerPath[i]===key);
 }
-function go(id, route) {
-  picked=null; selectedNode=null;
-  stateCanvas=null;
-  path=route || pathTo(id);
-  $('#content').scrollTo(0,0);
+function currentView() {
+  const canvas=$('#content');
+  return {path:[...path],tab,stateCanvas,selectedNode,search:$('#search').value,
+    expanded:[...expandedPaths],scroll:[canvas.scrollLeft,canvas.scrollTop],
+    event:$('dialog').open?$('#modal').dataset.event:null};
+}
+function validView(view){
+  return view.path.every((id,i)=>Object.hasOwn(p.entities,id) &&
+    (!i || p.entities[view.path[i-1]].children.includes(id))) &&
+    (!view.stateCanvas || p.states[view.stateCanvas]?.owner===view.path.at(-1));
+}
+function go(id,route,viewTab=tab,state=null) {
+  const nextPath=route || pathTo(id);
+  if(path.join('/')===nextPath.join('/') && tab===viewTab && stateCanvas===state)return;
+  backStack.push(currentView());
+  path=nextPath;tab=viewTab;stateCanvas=state;
+  selectedNode=null;picked=null;entityDraft=null;$('#search').value='';
   if ($('dialog').open) $('dialog').close();
   document.body.classList.remove('openpool');
-  render();
+  render();$('#content').scrollTo(0,0);
+}
+function goBack(){
+  while(backStack.length){
+    const previous=backStack.pop();
+    if(!validView(previous))continue;
+    path=previous.path;tab=previous.tab;stateCanvas=previous.stateCanvas;
+    selectedNode=previous.selectedNode;picked=null;entityDraft=null;
+    expandedPaths.clear();for(const key of previous.expanded)expandedPaths.add(key);
+    $('#search').value=previous.search;
+    if($('dialog').open)$('dialog').close();
+    render();$('#content').scrollTo(...previous.scroll);
+    if(previous.event && p.events[previous.event])eventDetail(previous.event);
+    return;
+  }
+  $('#up').disabled=true;
 }
 export function notice(message) {
   const t=$('#toast');
@@ -80,10 +110,10 @@ function topology(project) {
     entries(project.events).map(([id,e])=>[id,e.owner,e.ownerPath,e.scope,e.causes,e.conditions,e.effects,e.effectPaths])
   ]);
 }
-export async function save(next, after) {
+export async function save(next, after, {undo=false}={}) {
   if (busy) return;
   // Hand edits belong to this topology. Rebuild after nodes or logical links change.
-  if (next.graphLayouts && topology(p)!==topology(next)) {
+  if (!undo && next.graphLayouts && topology(p)!==topology(next)) {
     for(const [route,layout] of entries(next.graphLayouts)){
       const chain=route.split('/');
       const valid=chain.every((id,i)=>Object.hasOwn(next.entities,id) &&
@@ -103,6 +133,11 @@ export async function save(next, after) {
     const result=await r.json();
     if(ticket!==loadSequence)return;
     if (!r.ok) throw Error(result.error || 'Не удалось сохранить');
+    if(undo)undoStack.pop();
+    else {
+      undoStack.push(p);
+      if(undoStack.length>undoLimit)undoStack.shift();
+    }
     p=next; version=result.version;
     $('#status').textContent='Сохранено';
     if ($('dialog').open) $('dialog').close();
@@ -111,7 +146,21 @@ export async function save(next, after) {
   } catch(err) { $('#status').textContent='Ошибка сохранения'; notice(err.message); }
   finally { busy=false; document.body.classList.remove('saving'); }
 }
+function undoChange(){
+  if(busy)return;
+  if(!undoStack.length)return notice('Пока нечего отменять.');
+  const previous=undoStack.at(-1);
+  // A successful undo is another versioned write. A conflict leaves the stack intact.
+  save(structuredClone(previous),()=>{
+    while(path.length && !validView({path,stateCanvas:null}))path=path.slice(0,-1);
+    if(!path.length)path=['root'];
+    if(stateCanvas && p.states[stateCanvas]?.owner!==here())stateCanvas=null;
+    picked=null;entityDraft=null;
+    notice('Последнее изменение отменено.');
+  },{undo:true});
+}
 export function modal(title,...kids) {
+  delete $('#modal').dataset.event;
   $('#modal').replaceChildren(el('div',{class:'modalhead'},el('h2',{},title),btn('×',()=>$('dialog').close(),'close')), ...kids);
   if (!$('dialog').open) $('dialog').showModal();
 }
@@ -122,23 +171,39 @@ export function fields(obj) {
 export const footer = (...kids)=>el('div',{class:'footer'},...kids);
 const blank=msg=>el('p',{class:'empty'},msg);
 const count=(obj,id)=>entries(obj).filter(([,o])=>o.owner===id).length;
-function entityForm(id=null, parentRoute=null) {
-  const draft=id?{...p.entities[id]}:{name:'',desc:''};
+function editEntity(id) {
+  const draft={...p.entities[id]};
   const form=el('form',{onsubmit:e=>{
     e.preventDefault();
-    const next=structuredClone(p),key=id || uid();
-    if(id)Object.assign(next.entities[id],{name:draft.name,desc:draft.desc});
-    else {
-      next.entities[key]={...draft,children:[]};
-      if(parentRoute)next.entities[parentRoute.at(-1)].children.push(key);
-    }
-    save(next,()=>{
-      if(!id)picked=parentRoute?null:key;
-      document.body.classList.remove('openpool');
-    });
-  }},...fields(draft),footer(id && id!=='root'?btn('Удалить из пула',()=>deleteObj('entities',id),'danger'):null,
+    const next=structuredClone(p);
+    Object.assign(next.entities[id],{name:draft.name,desc:draft.desc});save(next);
+  }},...fields(draft),footer(id!=='root'?btn('Удалить из пула',()=>deleteObj('entities',id),'danger'):null,
     el('button',{type:'submit',class:'primary'},'Сохранить')));
-  modal(id?'Редактировать сущность':'Новая сущность',form);
+  modal('Редактировать сущность',form);
+}
+function beginEntity(route=null){
+  const target=route?.join('/') ?? null;
+  if(!entityDraft || entityDraft.target!==target)entityDraft={target,name:'',desc:''};
+  if(route)expandedPaths.add(target);
+  picked=null;render();$('.entity-draft input')?.focus();
+}
+function entityDraftForm(){
+  const draft=entityDraft;
+  const cancel=()=>{entityDraft=null;render();};
+  const form=el('form',{class:'entity-draft',ariaLabel:'Новая сущность',onsubmit:e=>{
+    e.preventDefault();
+    if(busy)return;
+    if(!draft.name.trim()){form.querySelector('input').focus();return;}
+    const next=structuredClone(p),id=uid();
+    next.entities[id]={name:draft.name.trim(),desc:draft.desc,children:[]};
+    if(draft.target)next.entities[draft.target.split('/').at(-1)].children.push(id);
+    save(next,()=>{
+      entityDraft=null;
+      if(!draft.target){picked=id;document.body.classList.remove('openpool');}
+    });
+  }},...fields(draft),footer(btn('Отмена',cancel),el('button',{type:'submit',class:'primary'},'Создать')));
+  form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cancel();}};
+  return form;
 }
 export function deleteObj(type,id) {
   const next=structuredClone(p), obj=next[type][id];
@@ -309,10 +374,14 @@ function enableCardDrag(card,id,kind) {
   });
 }
 function choose(id) {
-  picked=picked===id?null:id;document.body.classList.remove('openpool');render();
+  entityDraft=null;picked=picked===id?null:id;document.body.classList.remove('openpool');render();
 }
 function renderPool() {
   $('#pooltitle').textContent=poolTitles[tab];
+  const draftHost=$('#poolDraft');
+  if(tab==='entities' && entityDraft?.target===null){
+    if(!draftHost.firstChild)draftHost.append(entityDraftForm());
+  }else draftHost.replaceChildren();
   const needle=$('#search').value.trim().toLocaleLowerCase();
   const rows=[], scope=descendants(here());
   for(const [id,obj] of entries(p[tab])) {
@@ -343,6 +412,7 @@ function eventDetail(id) {
       ...e.effects.map((s,i)=>ruleReference('state',s,e.effectPaths?.[i])),
       ...targets.map(k=>ruleReference('event',k))):blank('Последствий пока нет'),
     footer(btn('Редактировать правило',()=>editEvent(e.owner,id),'primary')));
+  $('#modal').dataset.event=id;
 }
 export {eventDetail,stateDetail};
 function showRelations() {
@@ -437,7 +507,7 @@ function cardText(container,type,id){
 function addObject(owner=here(),point=null,host=null) {
   if(stateCanvas)go(owner,scopePath(owner));
   if(tab==='events')return editEvent(owner);
-  if(tab==='entities')return entityForm();
+  if(tab==='entities')return beginEntity();
   if(!host){
     const board=$('#board'), view=$('#content');
     const old=board.querySelector('.state-draft');
@@ -450,15 +520,14 @@ function addObject(owner=here(),point=null,host=null) {
 }
 function openStateCanvas(id,ownerRoute){
   const owner=p.states[id].owner;
-  go(owner,ownerRoute || scopePath(owner));
-  tab='states';stateCanvas=id;render();
+  go(owner,ownerRoute || scopePath(owner),'states',id);
 }
 function drawActions() {
   const bar=$('#actions'); bar.replaceChildren();
   if(tab==='entities') {
     if(picked)bar.append(el('span',{class:'placementbar'},'Куда вложить «'+p.entities[picked].name+'»?'),
       btn('В текущий раздел',()=>attachEntity(picked,path)),btn('Отмена',()=>{picked=null;render();}));
-    else bar.append(btn('＋ Вложенная сущность',()=>entityForm(null,path),'primary'));
+    else bar.append(btn('＋ Вложенная сущность',()=>beginEntity(path),'primary'));
     return;
   }
   bar.append(btn(tab==='states'?'＋ Состояние':'＋ Событие',()=>addObject(),'primary'));
@@ -498,12 +567,12 @@ function entityMap(board){
       function section(kind,total){
         if(!total)return;
         const link=btn(tabs[kind]+' · '+total,()=>{
-          tab=kind;$('#search').value='';go(id,route);
+          go(id,route,kind);
         },'tree-section');
         link.title='Открыть раздел «'+tabs[kind]+'» для «'+entity.name+'»';stats.append(link);
       }
       section('states',states);section('events',events);
-      const edit=btn('✎',()=>entityForm(id),'tree-action');
+      const edit=btn('✎',()=>editEntity(id),'tree-action');
       edit.title='Изменить '+entity.name;edit.setAttribute('aria-label',edit.title);
       const unlink=btn('×',()=>{
         const next=structuredClone(p),parent=next.entities[parentId];
@@ -511,9 +580,12 @@ function entityMap(board){
         clearPlacement(parent,id);save(next);
       },'tree-action');
       unlink.title='Убрать из «'+p.entities[parentId].name+'»';unlink.setAttribute('aria-label',unlink.title);
-      row.append(stats,edit,unlink);
+      const add=btn('＋',()=>beginEntity(route),'tree-action tree-add');
+      add.title='Создать внутри «'+entity.name+'»';add.setAttribute('aria-label',add.title);
+      row.append(stats,add,edit,unlink);
     }
     item.append(row);
+    if(entityDraft?.target===key)item.append(entityDraftForm());
     function show(open){
       if(open)expandedPaths.add(key);else expandedPaths.delete(key);
       toggle.textContent=open?'▾':'▸';
@@ -528,7 +600,10 @@ function entityMap(board){
   const children=p.entities[here()].children;
   root.append(...children.map(id=>branch([...path,id])));
   board.style.width='100%';board.style.height='auto';
-  board.replaceChildren(children.length?root:el('p',{class:'tree-empty'},'Пока нет вложенных сущностей. Создайте первую или добавьте из пула.'));
+  board.replaceChildren();
+  if(entityDraft?.target===path.join('/'))board.append(entityDraftForm());
+  if(children.length)board.append(root);
+  else if(!board.childElementCount)board.append(el('p',{class:'tree-empty'},'Пока нет вложенных сущностей. Создайте первую или добавьте из пула.'));
 }
 function stateBranchCard(id,owners,point) {
   const entity=p.entities[id],card=el('article',{class:'spacecard states'});
@@ -671,10 +746,11 @@ function render() {
   $('#topproject').textContent=p.entities.root.name;
   $('#crumbs').replaceChildren(...path.flatMap((key,i)=>[...(i?[' / ']:[]),btn(p.entities[key].name,()=>go(key,path.slice(0,i+1)),'crumb')]));
   if(stateCanvas)$('#crumbs').append(' / ',current.name);
-  $('#up').disabled=!stateCanvas && path.length<2;
-  $('#up').onclick=()=>stateCanvas?go(id,path.slice()):go(path.at(-2),path.slice(0,-1));
+  while(backStack.length && !validView(backStack.at(-1)))backStack.pop();
+  $('#up').disabled=!backStack.length;
+  $('#up').onclick=goBack;
   $('#tabs').replaceChildren(...entries(tabs).map(([key,name])=>{
-    const b=btn(name,()=>{selectedNode=null;stateCanvas=null;tab=key;picked=null;$('#search').value='';render();},key===tab?'selected':'');
+    const b=btn(name,()=>go(here(),path,key),key===tab?'selected':'');
     b.setAttribute('aria-pressed',String(key===tab));return b;
   }));
   if(stateCanvas){
@@ -743,7 +819,7 @@ function newProject(){
 async function route(){
   wires?.dispose();wires=null;
   const ticket=++loadSequence, id=location.hash.match(/^#project\/([1-9]\d*)$/)?.[1];
-  expandedPaths.clear();
+  expandedPaths.clear();backStack.length=0;undoStack.length=0;entityDraft=null;
   if($('dialog').open)$('dialog').close();
   document.body.classList.remove('openpool');
   stateCanvas=null;$('#home').hidden=!id;$('#studio').hidden=true;$('#poolToggle').hidden=true;$('#library').hidden=Boolean(id);
@@ -777,7 +853,7 @@ importInput.onchange=async()=>{
 $('#home').onclick=home;$('#newProject').onclick=newProject;
 $('#poolToggle').onclick=()=>document.body.classList.toggle('openpool');
 $('#createPool').onclick=()=>addObject();
-$('#search').oninput=renderPool;$('#edit').onclick=()=>stateCanvas?editCardFields($('.context>div'),'states',stateCanvas):entityForm(here());
+$('#search').oninput=renderPool;$('#edit').onclick=()=>stateCanvas?editCardFields($('.context>div'),'states',stateCanvas):editEntity(here());
 
 const board=$('#board');
 board.ondragover=e=>{
@@ -802,5 +878,12 @@ board.ondrop=e=>{
 };
 board.ondblclick=e=>{if(!stateCanvas && e.target===board && tab!=='entities')addObject(here(),pointFor(e));};
 document.addEventListener('keydown',e=>{if(e.key==='Escape' && picked && !$('dialog').open){picked=null;render();}});
+document.addEventListener('keydown',e=>{
+  if(e.defaultPrevented || e.isComposing || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey ||
+     (e.code!=='KeyZ' && e.key.toLowerCase()!=='z') || !projectId || $('#studio').hidden)return;
+  if(e.target.isContentEditable || e.target.closest?.('input,textarea'))return;
+  e.preventDefault();
+  if(!e.repeat)undoChange();
+});
 window.addEventListener('hashchange',route);
 route();
