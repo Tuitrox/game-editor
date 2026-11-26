@@ -166,6 +166,13 @@ button.rule-ref:hover{text-decoration:underline}
 .spacecard.graph-muted{opacity:.28}.wire.graph-muted{opacity:.16}.wire.graph-lit .wire-line{stroke-width:3}
 
 #board.entity-map{background:#f6f8f3;padding:clamp(12px,2vw,28px);box-sizing:border-box}
+.entity-parameters{display:grid;gap:6px;max-width:620px;margin-bottom:16px}
+.parameter-heading,.parameter-row,.parameter-form{display:flex;align-items:center;gap:12px}
+.parameter-heading h3{margin:0}
+.parameter-row{justify-content:space-between;text-align:left;overflow-wrap:anywhere}
+.parameter-form{flex-wrap:wrap;align-items:end;padding:10px;background:white;border:1px solid var(--line);border-radius:8px}
+.parameter-form .field{margin:0;flex:1 1 140px;min-width:0}
+.parameter-form .addrow{margin:0;align-items:center}
 .entity-tree,.entity-tree ul{list-style:none;margin:0;padding:0}
 .entity-tree{max-width:1080px}
 .entity-tree>li{margin:0 0 10px;border:1px solid #c5d2c6;border-radius:10px;background:#fff}

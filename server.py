@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -42,6 +43,15 @@ def validate(p):
         if key in visited:
             return
         active.add(key)
+        parameters = entities[key].get("parameters", {})
+        require(isinstance(parameters, dict), "Неверный список параметров")
+        for param_id, param in parameters.items():
+            require(param_id.isascii() and param_id.replace("-", "").isalnum() and
+                    isinstance(param, dict), "Неверный параметр")
+            require(isinstance(param.get("name"), str) and param["name"].strip(), "Нужно название параметра")
+            value = param.get("value")
+            require(type(value) in (int, float) and -sys.float_info.max <= value <= sys.float_info.max,
+                    "Начальное значение параметра должно быть конечным числом")
         children = entities[key]["children"]
         require(isinstance(children, list) and len(set(children)) == len(children)
                 and "root" not in children, "Недопустимое вложение")

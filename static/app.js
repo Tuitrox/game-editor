@@ -511,6 +511,51 @@ function globalEvents(){
   modal('Глобальные события',...list.map(([id,e])=>btn(e.name,()=>editEvent(e.owner,id),'effect')),
     footer(btn('＋ Глобальное событие',()=>editEvent('root',null,'global'),'primary')));
 }
+function entityParameters(owner){
+  const section=el('section',{class:'entity-parameters',ariaLabel:'Параметры сущности'});
+  const parameters=p.entities[owner].parameters || {};
+  function show(editing=null){
+    const add=btn('＋ Параметр',()=>show(''));
+    add.disabled=editing==='';
+    const header=el('div',{class:'parameter-heading'},add);
+    if(Object.keys(parameters).length || editing!==null)header.prepend(el('h3',{},'Параметры'));
+    section.replaceChildren(header);
+    for(const [id,param] of entries(parameters)){
+      if(id===editing){section.append(form(id,param));continue;}
+      const row=btn('',()=>show(id),'parameter-row');
+      row.title='Изменить параметр «'+param.name+'»';
+      row.append(el('span',{},param.name),el('strong',{},String(param.value)));
+      section.append(row);
+    }
+    if(editing==='')section.append(form('',{name:'',value:''}));
+    if(editing!==null)section.querySelector('input').focus();
+  }
+  function form(id,param){
+    const name=el('input',{name:'name',value:param.name,required:true,placeholder:'Например, HP'});
+    const value=el('input',{name:'value',type:'number',step:'any',value:param.value,required:true});
+    const cancel=()=>{show();section.querySelector('.parameter-heading button').focus();};
+    const editor=el('form',{class:'parameter-form',onsubmit:e=>{
+      e.preventDefault();
+      if(busy)return;
+      if(!name.value.trim()){name.focus();return;}
+      const next=structuredClone(p);
+      (next.entities[owner].parameters??={})[id || uid()]={name:name.value.trim(),value:value.valueAsNumber};
+      save(next);
+    }},label('Название',name),label('Начальное значение',value));
+    const actions=el('div',{class:'addrow'},el('button',{type:'submit',class:'primary'},'Сохранить'),btn('Отмена',cancel));
+    if(id)actions.append(btn('Удалить',()=>{
+      const next=structuredClone(p),params=next.entities[owner].parameters;
+      delete params[id];
+      if(!Object.keys(params).length)delete next.entities[owner].parameters;
+      save(next);
+    },'danger'));
+    editor.append(actions);
+    editor.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cancel();}};
+    return editor;
+  }
+  show();
+  return section;
+}
 function entityMap(board){
   const root=el('ul',{class:'entity-tree'});
   function branch(route){
@@ -576,6 +621,7 @@ function entityMap(board){
   if(entityDraft?.target===path.join('/'))board.append(entityDraftForm());
   if(children.length)board.append(root);
   else if(!board.childElementCount)board.append(el('p',{class:'tree-empty'},'Пока нет вложенных сущностей. Создайте первую или добавьте из пула.'));
+  board.prepend(entityParameters(here()));
 }
 // Index the project's rules once. A reference with no path applies to every
 // placement of the owner. Explicit paths may start below the project root.
