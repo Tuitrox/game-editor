@@ -553,11 +553,19 @@ function entityMap(board){
     const id=route.at(-1), entity=p.entities[id], key=route.join('/');
     const item=el('li'),row=el('div',{class:'entity-row'});
     row.dataset.route=key;
-    const toggle=btn('',()=>show(!expandedPaths.has(key)),'tree-disclosure');
-    const name=btn(entity.name,()=>go(id,route),'tree-name');
+    const hasChildren=entity.children.length>0;
+    const activate=()=>hasChildren?show(!expandedPaths.has(key)):go(id,route);
+    const toggle=el('span',{class:hasChildren?'tree-disclosure':'tree-leaf',ariaHidden:'true'});
+    const name=btn(entity.name,activate,'tree-name');
+    row.onclick=e=>{if(!e.target.closest('button'))activate();};
     const text=el('div',{class:'tree-text'},name);
     if(entity.desc)text.append(el('p',{title:entity.desc},entity.desc));
-    row.append(entity.children.length?toggle:el('span',{class:'tree-leaf',ariaHidden:'true'}),text);
+    row.append(toggle,text);
+    if(hasChildren){
+      const open=btn('↗',()=>go(id,route),'tree-action');
+      open.title='Открыть «'+entity.name+'»';open.setAttribute('aria-label',open.title);
+      row.append(open);
+    }
     if(picked)row.append(btn('Вложить сюда',()=>attachEntity(picked,route),'tree-attach'));
     else {
       const parentId=route.at(-2);
@@ -589,8 +597,8 @@ function entityMap(board){
     function show(open){
       if(open)expandedPaths.add(key);else expandedPaths.delete(key);
       toggle.textContent=open?'▾':'▸';
-      toggle.setAttribute('aria-expanded',String(open));
-      toggle.setAttribute('aria-label',(open?'Свернуть ':'Раскрыть ')+entity.name);
+      name.setAttribute('aria-expanded',String(open));
+      name.title=(open?'Свернуть ':'Раскрыть ')+entity.name;
       item.querySelector(':scope > ul')?.remove();
       if(open)item.append(el('ul',{},entity.children.map(child=>branch([...route,child]))));
     }

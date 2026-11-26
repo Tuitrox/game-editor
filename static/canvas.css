@@ -172,7 +172,7 @@ button.rule-ref:hover{text-decoration:underline}
 .entity-tree li>ul{margin:0 10px 8px 23px;padding-left:12px;border-left:1px solid #bdd1c1}
 .entity-tree li>ul>li{position:relative}
 .entity-tree li>ul>li::before{content:'';position:absolute;top:23px;left:-12px;width:12px;border-top:1px solid #bdd1c1}
-.entity-row{display:flex;gap:6px;align-items:center;padding:8px;min-height:45px;border-radius:8px}
+.entity-row{display:flex;gap:6px;align-items:center;padding:8px;min-height:45px;border-radius:8px;cursor:pointer}
 .entity-row:hover,.entity-row:focus-within{background:#f2f6ee}
 .tree-text{min-width:0;flex:1}
 .tree-text p{margin:2px 0 0;font-size:12px;color:#58695f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -180,7 +180,7 @@ button.rule-ref:hover{text-decoration:underline}
 .entity-row .tree-name{display:block;max-width:100%;padding:2px 0;background:transparent;border:0;text-align:left;overflow-wrap:anywhere;font-size:15px;font-weight:600;color:#254a3d}
 .tree-name:hover{text-decoration:underline}
 .tree-disclosure,.tree-leaf{width:24px;flex:none}
-.tree-disclosure{padding:3px;background:#eef4eb;border:1px solid #cad8ca;color:#345c48}
+.tree-disclosure{padding:3px;text-align:center;border-radius:4px;background:#eef4eb;border:1px solid #cad8ca;color:#345c48}
 .tree-leaf::before{content:'';display:block;margin:auto;width:6px;height:6px;border-radius:2px;background:#a4b9ac}
 .tree-stats{display:flex;gap:4px;flex-wrap:wrap}
 .entity-row .tree-section,.entity-row .tree-action{background:transparent;border:0;color:#4b6658;font-size:12px;padding:4px}
