@@ -5,12 +5,6 @@ function svg(tag,attrs={}){
   for(const [key,value] of Object.entries(attrs))node.setAttribute(key,String(value));
   return node;
 }
-function boundary(rect,toward){
-  const cx=rect.x+rect.w/2,cy=rect.y+rect.h/2;
-  const dx=toward[0]-cx,dy=toward[1]-cy;
-  const scale=Math.max(Math.abs(dx)/(rect.w/2),Math.abs(dy)/(rect.h/2));
-  return scale?[cx+dx/scale,cy+dy/scale]:[cx,cy];
-}
 function nearestSegment(points,[x,y]){
   let best=Infinity,index=0;
   for(let i=0;i+1<points.length;i++){
@@ -29,7 +23,7 @@ export function wireLayer(board,gridStep){
   const observer=new ResizeObserver(entries=>{
     for(const update of new Set(entries.flatMap(({target})=>updates.get(target) || [])))update();
   });
-  function connect(start,end,role,initial,commit,locked){
+  function connect(start,end,role,initial,commit,locked,port,description){
     const group=svg('g',{class:'wire '+role});
     const markerId='wire-arrow-'+role;
     if(!defs.querySelector('#'+markerId)){
@@ -38,7 +32,7 @@ export function wireLayer(board,gridStep){
     }
     const line=svg('polyline',{class:'wire-line','marker-end':'url(#'+markerId+')'});
     const hit=svg('polyline',{class:'wire-hit'}), handles=svg('g');
-    group.append(line,hit,handles);layer.append(group);
+    const title=svg('title');title.textContent=description;group.append(title,line,hit,handles);layer.append(group);
     let bends=structuredClone(initial), vertices=[],gesture=null;
     function location(event){
       const r=board.getBoundingClientRect();
@@ -52,11 +46,19 @@ export function wireLayer(board,gridStep){
         return {x:r.left-origin.left,y:r.top-origin.top,w:r.width,h:r.height};
       };
       const a=rect(start),b=rect(end);
-      vertices=[boundary(a,bends[0] || [b.x+b.w/2,b.y+b.h/2]),...bends,
-        boundary(b,bends.at(-1) || [a.x+a.w/2,a.y+a.h/2])];
+      vertices=[[a.x+a.w, Math.round(a.y+a.h*port.start)], ...bends,
+        [b.x, Math.round(b.y+b.h*port.end)]];
       const coords=vertices.map(p=>p.join(',')).join(' ');
       hit.setAttribute('points',coords);line.setAttribute('points',coords);
-      handles.replaceChildren(...bends.map(([x,y],i)=>svg('circle',{cx:x,cy:y,r:5,'data-index':i,class:'wire-bend'})));
+      while(handles.childElementCount>bends.length)handles.lastElementChild.remove();
+      bends.forEach(([x,y],i)=>{
+        let handle=handles.children[i];
+        if(!handle){
+          handle=svg('circle',{r:5,'data-index':i,class:'wire-bend'});
+          handles.append(handle);
+        }
+        handle.setAttribute('cx',x);handle.setAttribute('cy',y);
+      });
     }
     function persist(before){
       Promise.resolve(commit(bends)).then(()=>{if(group.isConnected){bends=before;paint();}});
@@ -75,9 +77,9 @@ export function wireLayer(board,gridStep){
         if(save)persist(before);else{bends=before;paint();}
       }
       paint();
-      group.addEventListener('pointermove',ev=>{if(ev.pointerId===e.pointerId){bends[i]=snapped(location(ev));paint();}},opts);
-      group.addEventListener('pointerup',ev=>{if(ev.pointerId===e.pointerId)finish(true);},opts);
-      group.addEventListener('pointercancel',ev=>{if(ev.pointerId===e.pointerId)finish(false);},opts);
+      window.addEventListener('pointermove',ev=>{if(ev.pointerId===e.pointerId){bends[i]=snapped(location(ev));paint();}},opts);
+      window.addEventListener('pointerup',ev=>{if(ev.pointerId===e.pointerId)finish(true);},opts);
+      window.addEventListener('pointercancel',ev=>{if(ev.pointerId===e.pointerId)finish(false);},opts);
       group.addEventListener('lostpointercapture',()=>finish(false),opts);
       window.addEventListener('blur',()=>finish(false),opts);
       window.addEventListener('keydown',ev=>{if(ev.key==='Escape')finish(false);},opts);
@@ -93,6 +95,7 @@ export function wireLayer(board,gridStep){
       updates.get(node).push(paint);
     }
     paint();
+    return group;
   }
   return {connect,refresh(node){for(const fn of updates.get(node)||[])fn();},dispose(){observer.disconnect();}};
 }

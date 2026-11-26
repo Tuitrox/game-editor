@@ -1,4 +1,4 @@
-import {p,el,btn,option,label,entries,uid,modal,fields,footer,save,deleteObj,outbound,eventDetail,stateDetail,notice,setLayerPoint,currentOwnerPath} from './app.js';
+import {p,el,btn,option,label,entries,uid,modal,fields,footer,save,deleteObj,outbound,eventDetail,stateDetail,notice,currentOwnerPath} from './app.js';
 
 import {pathLabel} from './routes.js';
 
@@ -303,7 +303,7 @@ function ruleBoard(root,kind,event,draw){
   const board=el('div',{class:'logic-board'});
   board.append(block(root,null));return board;
 }
-export function editEvent(owner,id,point=null,scope='local') {
+export function editEvent(owner,id=null,scope='local') {
   const key=id || uid();
   const event=id?structuredClone(p.events[id]):{name:'',desc:'',owner,scope,ownerPath:scope==='local'?currentOwnerPath(owner):null,conditions:newGroup(),causes:newGroup(),effects:[]};
   for(const field of ['conditions','causes']){
@@ -322,7 +322,6 @@ export function editEvent(owner,id,point=null,scope='local') {
     const draft=structuredClone(event);
     for(const n of leaves(draft.conditions))delete n.pick;
     next.events[key]=draft;
-    if(!id && point)setLayerPoint(next,owner,'events',key,point);
     for(const [target] of nextTargets) {
       if(original.includes(target) && !outgoing.has(target))removeCause(next.events[target].causes,key,true);
       if(!original.includes(target) && outgoing.has(target))addCause(next.events[target],key);

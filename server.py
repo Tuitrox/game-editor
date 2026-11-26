@@ -11,7 +11,7 @@ BASE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("DATA_DIR", BASE / "data"))
 DB = DATA / "editor.sqlite3"
 ASSETS = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
-          "/wires.js": ("wires.js", "text/javascript"), "/routes.js": ("routes.js", "text/javascript"), "/canvas.css": ("canvas.css", "text/css"), "/editor.js": ("editor.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
+          "/graph.js": ("graph.js", "text/javascript"), "/wires.js": ("wires.js", "text/javascript"), "/routes.js": ("routes.js", "text/javascript"), "/canvas.css": ("canvas.css", "text/css"), "/editor.js": ("editor.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
 
 
 def require(condition, message):
@@ -82,6 +82,23 @@ def validate(p):
             visit(child)
         active.remove(key)
         visited.add(key)
+
+    for route, layout in p.get("graphLayouts", {}).items():
+        require(isinstance(route, str) and isinstance(layout, dict), "Неверная раскладка схемы")
+        chain = route.split("/")
+        require(all(k in entities for k in chain) and
+                all(b in entities[a]["children"] for a, b in zip(chain, chain[1:])), "Неизвестный холст")
+        nodes = {"events:" + k for k in events} | {"states:" + k for k in states}
+        coordinates(layout["positions"], nodes)
+        coordinates(layout["sizes"], nodes)
+        for w, h in layout["sizes"].values():
+            require(220 <= w <= 10000 and 100 <= h <= 10000, "Неверный размер карточки")
+        for edge_key, bends in layout["bends"].items():
+            parts = edge_key.split("|")
+            require(len(parts) == 3 and parts[0] in nodes and parts[2] in nodes and
+                    parts[1] in ("cause", "condition", "effect"), "Неизвестная связь")
+            require(isinstance(bends, list), "Неверные точки поворота")
+            coordinates(dict(enumerate(bends)), range(len(bends)))
 
     for key in entities:
         visit(key)
@@ -190,18 +207,22 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(size))
 
     def do_POST(self):
-        if self.path != "/api/projects":
+        if self.path not in ("/api/projects", "/api/projects/import"):
             return self.reply(404, {})
         try:
             data = self.packet()
-            root = {"name": data["name"], "desc": data["desc"], "children": [], "positions": {}}
-            project = {"entities": {"root": root}, "states": {}, "events": {}}
+            require(isinstance(data, dict), "Ожидается объект проекта")
+            if self.path == "/api/projects/import":
+                project = data.get("project", data)
+            else:
+                root = {"name": data["name"], "desc": data["desc"], "children": [], "positions": {}}
+                project = {"entities": {"root": root}, "states": {}, "events": {}}
             validate(project)
             with sqlite3.connect(DB) as db:
                 key = db.execute("INSERT INTO project(version,body) VALUES(1,?)",
                                  (json.dumps(project, ensure_ascii=False),)).lastrowid
             self.reply(201, {"id": key, "version": 1, "project": project})
-        except (ValueError, TypeError, KeyError) as exc:
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError, IndexError) as exc:
             self.reply(400, {"error": str(exc)})
 
     def do_DELETE(self):
@@ -221,7 +242,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(409, {"error": "Название не совпадает с текущим названием проекта"})
                 db.execute("DELETE FROM project WHERE id=?", (key,))
             self.reply(200, {"id": key})
-        except (ValueError, TypeError, KeyError) as exc:
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError, IndexError) as exc:
             self.reply(400, {"error": str(exc)})
 
     def do_PUT(self):

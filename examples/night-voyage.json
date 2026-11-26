@@ -1,0 +1,520 @@
+{
+  "entities": {
+    "root": {
+      "name": "Ночной рейс · Последний створ",
+      "desc": "На подходе к гавани шквал гасит ходовые огни. До закрытия прохода экипажу нужно вернуть питание и получить разрешение на вход.",
+      "children": [
+        "ship",
+        "port"
+      ]
+    },
+    "ship": {
+      "name": "Грузовой теплоход",
+      "desc": "Три поста экипажа на ночном заходе.",
+      "children": [
+        "engine",
+        "hold",
+        "bridge"
+      ]
+    },
+    "engine": {
+      "name": "Генераторная",
+      "desc": "Здесь видно, как один шквал запускает две аварии.",
+      "children": [
+        "main",
+        "reserve"
+      ]
+    },
+    "main": {
+      "name": "Главный генератор",
+      "desc": "Дизель и его защита.",
+      "children": []
+    },
+    "reserve": {
+      "name": "Резервный генератор",
+      "desc": "Пускается механиком с местного поста.",
+      "children": []
+    },
+    "hold": {
+      "name": "Грузовой трюм",
+      "desc": "Льяльный колодец, насос и датчик уровня.",
+      "children": []
+    },
+    "bridge": {
+      "name": "Мостик",
+      "desc": "Экипаж следит за огнями, водой и сеансом связи.",
+      "children": []
+    },
+    "port": {
+      "name": "Портовый пост",
+      "desc": "Диспетчер держит проход открытым до смены сигнала.",
+      "children": []
+    }
+  },
+  "states": {
+    "dark": {
+      "owner": "bridge",
+      "name": "Ходовые огни погасли",
+      "desc": "Судно временно потеряло огни."
+    },
+    "low": {
+      "owner": "main",
+      "name": "Давление масла упало",
+      "desc": "Защита главного дизеля готова сработать."
+    },
+    "over": {
+      "owner": "engine",
+      "name": "Щит перегружен",
+      "desc": "На щите сработал сигнал перегрузки."
+    },
+    "dead": {
+      "owner": "engine",
+      "name": "Шина обесточена",
+      "desc": "Основные потребители потеряли питание."
+    },
+    "live": {
+      "owner": "engine",
+      "name": "На шине есть питание",
+      "desc": "Питание восстановлено после переключения."
+    },
+    "water": {
+      "owner": "hold",
+      "name": "Вода выше отметки",
+      "desc": "Поплавок поднялся выше верхнего датчика."
+    },
+    "dry": {
+      "owner": "hold",
+      "name": "Уровень воды в норме",
+      "desc": "Насос откачал воду до нижней отметки."
+    },
+    "lights": {
+      "owner": "bridge",
+      "name": "Ходовые огни горят",
+      "desc": "Огни доступны для проверки портом."
+    },
+    "open": {
+      "owner": "port",
+      "name": "Створ открыт",
+      "desc": "Диспетчер разрешает движение по проходу."
+    },
+    "inside": {
+      "owner": "ship",
+      "name": "Судно в гавани",
+      "desc": "Ночной заход завершён."
+    }
+  },
+  "events": {
+    "squall": {
+      "name": "Налетел шквал",
+      "desc": "Внешняя причина качки, брызг на палубе и воды в трюме.",
+      "owner": "root",
+      "scope": "global",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": []
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": []
+      },
+      "effects": []
+    },
+    "oil": {
+      "name": "Маслозаборник схватил воздух",
+      "desc": "Качка оголила маслозаборник.",
+      "owner": "main",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "squall"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": []
+      },
+      "effects": [
+        "low"
+      ]
+    },
+    "short": {
+      "name": "Залило шкаф лебёдки",
+      "desc": "Вода попала на палубную линию щита.",
+      "owner": "engine",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "squall"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": []
+      },
+      "effects": [
+        "over"
+      ]
+    },
+    "trip": {
+      "name": "Сработала защита дизеля",
+      "desc": "Защита отключила главный источник при падении давления.",
+      "owner": "main",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "oil"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": [
+          {
+            "op": "self",
+            "neg": false,
+            "refs": [
+              "low"
+            ]
+          }
+        ]
+      },
+      "effects": []
+    },
+    "blackout": {
+      "name": "Отключился ввод",
+      "desc": "Для отключения достаточно останова дизеля или перегрузки шкафа.",
+      "owner": "engine",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "trip"
+          },
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "short"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": []
+      },
+      "effects": [
+        "dead"
+      ]
+    },
+    "spray": {
+      "name": "Люк пропустил волну",
+      "desc": "Вода дошла до верхнего датчика в трюме.",
+      "owner": "hold",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "squall"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": []
+      },
+      "effects": [
+        "water"
+      ]
+    },
+    "out": {
+      "name": "Погасли ходовые огни",
+      "desc": "Мостик фиксирует потерю наружного освещения.",
+      "owner": "bridge",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "blackout"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": []
+      },
+      "effects": [
+        "dark"
+      ]
+    },
+    "manual": {
+      "name": "Капитан запросил резерв",
+      "desc": "После доклада об огнях капитан вызвал механика.",
+      "owner": "bridge",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "out"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": []
+      },
+      "effects": []
+    },
+    "restart": {
+      "name": "Механик запустил резерв",
+      "desc": "Механик подтвердил запуск у местного пульта.",
+      "owner": "reserve",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "manual"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": []
+      },
+      "effects": []
+    },
+    "transfer": {
+      "name": "Щит переключён на резерв",
+      "desc": "Резерв набрал обороты. Механик подключил его к обесточенной шине.",
+      "owner": "engine",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "restart"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": [
+          {
+            "op": "self",
+            "neg": false,
+            "refs": [
+              "dead"
+            ]
+          }
+        ]
+      },
+      "effects": [
+        "live"
+      ]
+    },
+    "relight": {
+      "name": "Огни проверены с крыла",
+      "desc": "Матрос подтвердил, что после переключения ходовые огни снова горят.",
+      "owner": "bridge",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "transfer"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": [
+          {
+            "op": "self",
+            "neg": false,
+            "refs": [
+              "dark"
+            ]
+          }
+        ]
+      },
+      "effects": [
+        "lights"
+      ]
+    },
+    "pump": {
+      "name": "Насос откачал трюм",
+      "desc": "С питанием и при высоком уровне насос может завершить откачку.",
+      "owner": "hold",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "transfer"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": [
+          {
+            "op": "self",
+            "neg": false,
+            "refs": [
+              "water"
+            ]
+          }
+        ]
+      },
+      "effects": [
+        "dry"
+      ]
+    },
+    "window": {
+      "name": "Диспетчер открыл створ",
+      "desc": "Началось короткое окно для входа в гавань.",
+      "owner": "port",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": []
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": []
+      },
+      "effects": [
+        "open"
+      ]
+    },
+    "radio": {
+      "name": "Запрошен вход в гавань",
+      "desc": "Для доклада нужны исправные огни и нормальный уровень воды. Проверка начинается после доклада любого из двух постов.",
+      "owner": "root",
+      "scope": "global",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "relight"
+          },
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "pump"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": [
+          {
+            "op": "all",
+            "neg": false,
+            "refs": [
+              "lights",
+              "dry"
+            ]
+          }
+        ]
+      },
+      "effects": []
+    },
+    "berth": {
+      "name": "Получено разрешение на вход",
+      "desc": "Диспетчер принял запрос, пока створ открыт.",
+      "owner": "port",
+      "scope": "local",
+      "causes": {
+        "op": "or",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "radio"
+          }
+        ]
+      },
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": [
+          {
+            "op": "self",
+            "neg": false,
+            "refs": [
+              "open"
+            ]
+          }
+        ]
+      },
+      "effects": [
+        "inside"
+      ]
+    }
+  }
+}

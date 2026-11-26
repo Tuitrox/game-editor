@@ -150,3 +150,16 @@ button.rule-ref:hover{text-decoration:underline}
 .delete-confirm{background:#8f392f;color:white;border-color:#8f392f}
 .delete-confirm:hover{background:#792b24}
 .delete-confirm:disabled{background:#ede9e7;color:#766c68;border-color:#dbd4d0;cursor:default}
+
+.project-actions{display:flex;gap:8px;flex-wrap:wrap}
+.graph-card.events{background:#fff0e0;border-color:#bd7739}
+.graph-card.states{background:#eaf4fa;border-color:#5992aa}
+.spacecard.graph-card{width:230px;min-height:105px;border-width:2px}
+.graph-card.external{border-style:dashed;background:rgb(250 250 245 / .68);opacity:.78}
+.graph-card .graph-title{font-size:15px;font-weight:650;line-height:1.25;text-align:left;padding:0 18px 0 0;border:0;background:transparent;overflow-wrap:anywhere;max-width:100%}
+.graph-card small,.graph-owner{font-size:11px;color:#536360}
+.graph-open{position:absolute;top:8px;right:8px;padding:0 5px;font-size:14px}
+.wire.cause{color:#ad692b}.wire.effect{color:#327fa6}.wire.condition{color:#427952}
+.wire.condition .wire-line{stroke-dasharray:6 3}
+.graph-card.graph-origin{outline:3px solid #284e42;outline-offset:2px}
+.spacecard.graph-muted{opacity:.28}.wire.graph-muted{opacity:.16}.wire.graph-lit .wire-line{stroke-width:3}
