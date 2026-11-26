@@ -1,6 +1,6 @@
 import {p,el,btn,option,label,entries,uid,modal,fields,footer,save,deleteObj,outbound,eventDetail,stateDetail,notice,setLayerPoint,currentOwnerPath} from './app.js';
 
-import {entityRoutes,pathLabel} from './routes.js';
+import {pathLabel} from './routes.js';
 
 export const newGroup = ()=>({op:'and',neg:false,items:[]});
 export const leaves = n => n.items ? n.items.flatMap(leaves) : [n];
@@ -27,31 +27,16 @@ const ownerLabel=(owner,route)=>route?pathLabel(p,route):p.entities[owner].name+
 export const fullState=(id,route)=>ownerLabel(p.states[id].owner,route)+' → '+p.states[id].name;
 export const fullEvent=id=>ownerLabel(p.events[id].owner,p.events[id].ownerPath)+' / '+p.events[id].name;
 
-function searchPicker(caption,choices,onPick,browse=null){
+function searchPicker(caption,choices,onPick){
   const wrap=el('div',{class:'search-picker'});
   const trigger=btn(caption,()=>{
     if(wrap.children.length>1){wrap.lastElementChild.remove();return;}
     const input=el('input',{type:'search',placeholder:'Введите название или часть пути',ariaLabel:caption});
     const list=el('div',{class:'picker-results'});
-    let folder=[];
-    function showFolder(){
-      if(folder.length){
-        list.append(btn('← '+pathLabel(p,folder),()=>{folder=folder.slice(0,-1);filter();},'choice folder-up'));
-        for(const item of browse(folder))list.append(btn(item.label,()=>onPick(item),'choice'));
-      }
-      const nested=new Set(Object.values(p.entities).flatMap(e=>e.children));
-      const children=folder.length?p.entities[folder.at(-1)].children:Object.keys(p.entities).filter(key=>!nested.has(key));
-      for(const child of children){
-        const route=[...folder,child], items=browse(route);
-        if(!items.length && !p.entities[child].children.length)continue;
-        list.append(btn(p.entities[child].name+' ›',()=>{folder=route;filter();},'choice folder'));
-      }
-      if(!list.childElementCount)list.append(el('small',{},'Нет доступных элементов'));
-    }
     function filter(){
       list.replaceChildren();
       const terms=input.value.toLocaleLowerCase().split(/\s+/).filter(Boolean);
-      if(!terms.length && browse){showFolder();return;}
+
       for(const item of choices()){
         if(!terms.every(term=>item.label.toLocaleLowerCase().includes(term)))continue;
         list.append(btn(item.label,()=>onPick(item),'choice'));
@@ -72,8 +57,6 @@ function* eventChoices(){
   for(const [key] of entries(p.events))yield {key,label:fullEvent(key)};
 }
 function statesOf(owner){return entries(p.states).filter(([,s])=>s.owner===owner);}
-function stateItems(route){return statesOf(route.at(-1)).map(([key])=>({key,route,label:fullState(key,route)}));}
-function* stateChoices(){for(const route of entityRoutes(p))yield* stateItems(route);}
 function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=false}){
   const wrap=el('div',{class:'visual-picker'});
   const launch=btn(caption,()=>{
