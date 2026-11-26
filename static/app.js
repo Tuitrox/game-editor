@@ -819,12 +819,10 @@ function scopeTree(){
   tree.replaceChildren(results.length?el('ul',{},results.map(id=>branch([id]))):el('p',{class:'state-empty'},'Ничего не найдено'));
 }
 function renderScope(){
-  const available=tab==='states' || tab==='events',open=available && scopeOpen;
-  $('#scopeToggle').hidden=!available;
-  $('#scopeToggle').setAttribute('aria-expanded',String(open));
-  $('#scopePanel').hidden=!open;
-  $('#studio').classList.toggle('with-scope',open);
-  if(open)scopeTree();
+  $('#scopeToggle').setAttribute('aria-expanded',String(scopeOpen));
+  $('#scopePanel').hidden=!scopeOpen;
+  $('#studio').classList.toggle('with-scope',scopeOpen);
+  if(scopeOpen)scopeTree();
 }
 function render() {
   renderScope();
