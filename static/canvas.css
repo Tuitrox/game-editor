@@ -143,3 +143,10 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column}header{flex:n
 .ref-event,.ref-event:hover{background:#fff2e5;border-color:#e6c09b;color:#854517}
 button.rule-ref:hover{text-decoration:underline}
 .logic-leaf:is(.tone-all,.tone-any)>.rulehead>select{color:var(--operator);border-color:var(--operator);background:var(--operator-bg)}
+.project-entry{position:relative;display:grid;min-width:0}
+.project-entry .projectcard{padding-top:18px}
+.project-entry .symbol{padding-right:65px}
+.project-delete{position:absolute;right:12px;top:12px;font-size:12px;color:#873b32}
+.delete-confirm{background:#8f392f;color:white;border-color:#8f392f}
+.delete-confirm:hover{background:#792b24}
+.delete-confirm:disabled{background:#ede9e7;color:#766c68;border-color:#dbd4d0;cursor:default}

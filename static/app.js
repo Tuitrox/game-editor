@@ -636,7 +636,7 @@ function renderEventBoard(board,cards){
   let width=Math.max(1200,viewWidth+480),height=Math.max(900,$('#content').clientHeight+300);
   for(const b of occupied){width=Math.max(width,b.x+b.w+200);height=Math.max(height,b.y+b.h+200);}
   board.style.width=width+'px';board.style.height=height+'px';
-  wires=wireLayer(board);
+  wires=wireLayer(board,gridStep);
   for(const [id,{card,panels}] of eventGroups){
     for(const [role,panel] of panels){
       const incoming=role==='incoming';
@@ -693,6 +693,36 @@ async function request(url,options) {
 }
 function home(){if(location.hash)location.hash='';else route();}
 function openProject(id){location.hash='project/'+id;}
+function confirmProjectDeletion(item){
+  const submit=el('button',{type:'submit',class:'delete-confirm',disabled:true},'Удалить проект');
+  const input=el('input',{type:'text',autocomplete:'off',required:true,
+    oninput:()=>{submit.disabled=input.value!==item.name;}});
+  const form=el('form',{onsubmit:async e=>{
+    e.preventDefault();
+    if(submit.disabled || input.value!==item.name)return;
+    submit.disabled=true;input.disabled=true;
+    try{
+      await request('/api/projects/'+item.id,{method:'DELETE',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name:input.value})});
+      if(!location.hash){
+        if(form.isConnected && $('dialog').open)await route();
+        else document.getElementById('project-'+item.id)?.remove();
+      }
+    }catch(err){
+      notice(err.message);input.disabled=false;submit.disabled=false;
+    }
+  }},el('p',{},'Все сущности, состояния и события проекта будут удалены.'),
+    label('Введите точное название «'+item.name+'»',input),
+    footer(btn('Отмена',()=>$('dialog').close()),submit));
+  modal('Удалить проект?',form);input.focus();
+}
+function projectCard(item){
+  const open=el('button',{type:'button',class:'projectcard',onclick:()=>openProject(item.id)},
+    el('span',{class:'symbol'},'▦'),el('strong',{},item.name),el('p',{},item.desc));
+  const remove=btn('Удалить',()=>confirmProjectDeletion(item),'project-delete');
+  remove.ariaLabel='Удалить проект «'+item.name+'»';
+  return el('article',{class:'project-entry',id:'project-'+item.id},open,remove);
+}
 function newProject(){
   const draft={name:'',desc:''};
   const submit=el('button',{class:'primary',type:'submit'},'Создать проект');
@@ -721,9 +751,7 @@ async function route(){
     }else{
       const {projects}=await request('/api/projects');if(ticket!==loadSequence)return;
       projectId=null;p=null;$('#status').textContent='';
-      $('#projects').replaceChildren(...(projects.length?projects.map(item=>
-        el('button',{class:'projectcard',onclick:()=>openProject(item.id)},el('span',{class:'symbol'},'▦'),el('strong',{},item.name),el('p',{},item.desc))
-      ):[el('p',{class:'shelfempty'},'Здесь появятся ваши проекты.')]));
+      $('#projects').replaceChildren(...(projects.length?projects.map(projectCard):[el('p',{class:'shelfempty'},'Здесь появятся ваши проекты.')]));
     }
   }catch(err){if(ticket!==loadSequence)return;$('#status').textContent='Ошибка загрузки';notice(err.message);$('#library').hidden=false;$('#projects').replaceChildren(btn('Вернуться к проектам',home));}
 }

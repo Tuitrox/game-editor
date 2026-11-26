@@ -204,6 +204,26 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError, KeyError) as exc:
             self.reply(400, {"error": str(exc)})
 
+    def do_DELETE(self):
+        key = self.project_key()
+        if not key:
+            return self.reply(404, {"error": "Проект не найден"})
+        try:
+            name = self.packet()["name"]
+            require(isinstance(name, str) and name, "Введите название проекта")
+            with sqlite3.connect(DB) as db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute("SELECT json_extract(body, '$.entities.root.name') FROM project WHERE id=?",
+                                 (key,)).fetchone()
+                if row is None:
+                    return self.reply(404, {"error": "Проект уже удалён"})
+                if row[0] != name:
+                    return self.reply(409, {"error": "Название не совпадает с текущим названием проекта"})
+                db.execute("DELETE FROM project WHERE id=?", (key,))
+            self.reply(200, {"id": key})
+        except (ValueError, TypeError, KeyError) as exc:
+            self.reply(400, {"error": str(exc)})
+
     def do_PUT(self):
         key = self.project_key()
         if not key:
@@ -235,6 +255,15 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     DATA.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB) as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS project(id INTEGER PRIMARY KEY, version INTEGER, body TEXT)")
+        conn.execute("BEGIN IMMEDIATE")
+        schema = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='project'").fetchone()
+        # Keep a deleted project's URL from resolving to a newly created project.
+        migrate = schema and "AUTOINCREMENT" not in schema[0].upper()
+        if migrate:
+            conn.execute("ALTER TABLE project RENAME TO project_old")
+        conn.execute("CREATE TABLE IF NOT EXISTS project(id INTEGER PRIMARY KEY AUTOINCREMENT, version INTEGER, body TEXT)")
+        if migrate:
+            conn.execute("INSERT INTO project(id,version,body) SELECT id,version,body FROM project_old")
+            conn.execute("DROP TABLE project_old")
     ThreadingHTTPServer((os.environ.get("HOST", "127.0.0.1"), int(os.environ.get("PORT", 8787))), Handler).serve_forever()
 

@@ -21,7 +21,7 @@ function nearestSegment(points,[x,y]){
   }
   return index;
 }
-export function wireLayer(board){
+export function wireLayer(board,gridStep){
   const layer=svg('svg',{class:'wire-layer','aria-label':'Связи событий'});
   board.prepend(layer);
   const defs=svg('defs');layer.append(defs);
@@ -42,8 +42,9 @@ export function wireLayer(board){
     let bends=structuredClone(initial), vertices=[],gesture=null;
     function location(event){
       const r=board.getBoundingClientRect();
-      return [event.clientX-r.left,event.clientY-r.top].map(v=>Math.max(0,Math.min(2000000,Math.round(v))));
+      return [event.clientX-r.left,event.clientY-r.top];
     }
+    const snapped=point=>point.map(v=>Math.max(0,Math.min(2000000,Math.round(v/gridStep)*gridStep)));
     function paint(){
       const origin=board.getBoundingClientRect();
       const rect=node=>{
@@ -65,7 +66,7 @@ export function wireLayer(board){
       e.stopPropagation();e.preventDefault();
       const before=structuredClone(bends),point=location(e),index=e.target.dataset.index;
       const i=index===undefined?nearestSegment(vertices,point):Number(index);
-      if(index===undefined)bends.splice(i,0,point);
+      if(index===undefined)bends.splice(i,0,snapped(point));
       const controller=new AbortController(),opts={signal:controller.signal};
       gesture=controller;group.setPointerCapture(e.pointerId);
       function finish(save){
@@ -74,7 +75,7 @@ export function wireLayer(board){
         if(save)persist(before);else{bends=before;paint();}
       }
       paint();
-      group.addEventListener('pointermove',ev=>{if(ev.pointerId===e.pointerId){bends[i]=location(ev);paint();}},opts);
+      group.addEventListener('pointermove',ev=>{if(ev.pointerId===e.pointerId){bends[i]=snapped(location(ev));paint();}},opts);
       group.addEventListener('pointerup',ev=>{if(ev.pointerId===e.pointerId)finish(true);},opts);
       group.addEventListener('pointercancel',ev=>{if(ev.pointerId===e.pointerId)finish(false);},opts);
       group.addEventListener('lostpointercapture',()=>finish(false),opts);
