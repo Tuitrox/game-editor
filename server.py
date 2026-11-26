@@ -47,11 +47,20 @@ def validate(p):
                 and "root" not in children, "Недопустимое вложение")
         positions = entities[key].get("positions", {})
         coordinates(positions, children)
-        sizes = entities[key].get("sizes", {})
-        coordinates(sizes, children)
-        for width, height in sizes.values():
-            require(175 <= width <= 10000 and 100 <= height <= 10000
-                    and width % 5 == height % 5 == 0, "Неверный размер карточки")
+        def sizes_for(layout, allowed):
+            coordinates(layout, allowed)
+            for width, height in layout.values():
+                require(175 <= width <= 10000 and 100 <= height <= 10000
+                        and width % 5 == height % 5 == 0, "Неверный размер карточки")
+
+        sizes_for(entities[key].get("sizes", {}), children)
+        for kind, view in entities[key].get("views", {}).items():
+            require(kind in ("states", "events"), "Неизвестный холст")
+            coordinates(view.get("positions", {}), children)
+            sizes_for(view.get("sizes", {}), children)
+        for kind, layout in entities[key].get("layerSizes", {}).items():
+            require(kind in ("states", "events"), "Неизвестный холст")
+            sizes_for(layout, (k for k, obj in p[kind].items() if obj["owner"] == key))
         layers = entities[key].get("layers", {})
         require(isinstance(layers, dict) and layers.keys() <= {"states", "events"}, "Неизвестное восприятие")
         for kind, layout in layers.items():
@@ -81,17 +90,27 @@ def validate(p):
             check_path(path, states[key]["owner"])
         return paths
 
-    def rule(node, kind, outer=False):
+    def rule(node, kind, event, outer=False):
         require(type(node["neg"]) is bool, "Неверное отрицание")
         op = node["op"]
-        if op in ("and", "or"):
+        if op in ("and", "or", "not"):
             children = node["items"]
             require(isinstance(children, list) and (outer or children), "Заполните вложенную группу")
+            if op == "not":
+                require(len(children) == 1, "Область НЕ должна содержать один блок")
             for child in children:
-                rule(child, kind)
+                rule(child, kind, event)
         elif kind == "causes" and op == "event":
             require(node["ref"] in events, "Выберите событие")
+        elif kind == "conditions" and op == "self":
+            refs = node["refs"]
+            require(event.get("scope") == "local" and isinstance(refs, list) and len(refs) <= 1
+                    and all(key in states and states[key]["owner"] == event["owner"] for key in refs),
+                    "Выберите состояние источника события")
+            require(paths_for(node, "paths", refs) == [event.get("ownerPath")] * len(refs),
+                    "Неверное размещение источника")
         elif kind == "conditions" and op in ("all", "any"):
+            require(event.get("scope") != "local", "Группы сущностей доступны в глобальных событиях")
             refs = node["refs"]
             require(isinstance(refs, list) and refs and all(i in states for i in refs),
                     "Выберите сущности и состояние")
@@ -102,10 +121,12 @@ def validate(p):
             raise ValueError("Неверный блок правила")
 
     for event in events.values():
+        require(event.get("scope") in (None, "local", "global"), "Неизвестный тип события")
+        require(event.get("scope") != "global" or event["owner"] == "root", "Глобальное событие принадлежит проекту")
         check_path(event.get("ownerPath"), event["owner"])
         for kind in ("conditions", "causes"):
             require(event[kind]["op"] in ("and", "or"), "Нужна группа правил")
-            rule(event[kind], kind, True)
+            rule(event[kind], kind, event, True)
         require(isinstance(event["effects"], list) and all(i in states for i in event["effects"]),
                 "Выберите состояние последствия")
         paths_for(event, "effectPaths", event["effects"])

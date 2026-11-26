@@ -116,11 +116,13 @@ export function deleteObj(type,id) {
   if(type==='states' && entries(p.events).some(([,e])=>e.effects.includes(id)||leaves(e.conditions).some(n=>n.refs.includes(id)))) return notice('Состояние используется в правилах. Сначала измените связанные события.');
   if(!confirm('Удалить «'+obj.name+'»'+(type==='entities'?' из пула и всех вложений':'')+'?')) return;
   delete next[type][id];
-  if(type!=='entities')delete next.entities[obj.owner].layers?.[type]?.[id];
+  if(type!=='entities'){
+    delete next.entities[obj.owner].layers?.[type]?.[id];
+    delete next.entities[obj.owner].layerSizes?.[type]?.[id];
+  }
   if(type==='entities') for(const ent of Object.values(next.entities)) {
     ent.children=ent.children.filter(c=>c!==id);
-    if(ent.positions)delete ent.positions[id];
-    if(ent.sizes)delete ent.sizes[id];
+    clearPlacement(ent,id);
   }
   if(type==='events') for(const evt of Object.values(next.events)) removeCause(evt.causes,id);
   save(next,()=>{if(type==='states' && stateCanvas===id)stateCanvas=null;if(type==='entities' && path.includes(id))path=['root'];});
@@ -153,6 +155,28 @@ function positionCard(card,[x,y]){
   card.style.left=x+'px';
   card.style.top=y+'px';
 }
+function branchLayout(parent,view){
+  if(view==='entities')return parent;
+  const views=parent.views??={};
+  return views[view]??={positions:{},sizes:{}};
+}
+function clearPlacement(parent,id){
+  for(const layout of [parent,...Object.values(parent.views || {})]){
+    delete layout.positions?.[id];delete layout.sizes?.[id];
+  }
+}
+function prepareCard(card,id,kind){
+  const parent=p.entities[here()];
+  const sizes=kind==='entities'?branchLayout(parent,tab).sizes:parent.layerSizes?.[kind];
+  if(sizes?.[id]){
+    card.style.width=sizes[id][0]+'px';card.style.minHeight=sizes[id][1]+'px';
+  }
+  for(const edge of ['n','e','s','w','nw','ne','sw','se']){
+    const grip=el('span',{class:'resize-grip grip-'+edge,title:'Изменить размер'});
+    grip.dataset.edge=edge;card.append(grip);
+  }
+  enableCardDrag(card,id,kind);
+}
 function enableCardDrag(card,id,kind) {
   let suppressClick=false;
   card.addEventListener('click',e=>{
@@ -162,20 +186,39 @@ function enableCardDrag(card,id,kind) {
     if(!e.isPrimary || e.button!==0)return;
     suppressClick=false;
     const resizing=e.target.closest('.resize-grip');
-    if(busy || (!resizing && kind==='entities' && tab!=='entities') || (!resizing && e.target.closest('button,input,textarea,form,.child-list')))return;
+    if(busy || (!resizing && e.target.closest('button,input,textarea,form,.child-list')))return;
     const target=e.target;
     const start=[e.clientX,e.clientY], rect=card.getBoundingClientRect();
     const offset=[e.clientX-rect.left,e.clientY-rect.top];
-    const previous=[card.style.left,card.style.top,card.style.width,card.style.height];
-    const sizeAt=()=>[rect.width+pointer.clientX-start[0],rect.height+pointer.clientY-start[1]]
-      .map((value,i)=>Math.max(i===0?175:100,Math.min(10000,Math.round(value/gridStep)*gridStep)));
+    const previous=[card.style.left,card.style.top,card.style.width,card.style.minHeight];
+    const edge=resizing?.dataset.edge || '';
+    const origin=[parseFloat(card.style.left),parseFloat(card.style.top)];
+    const boardRect=$('#board').getBoundingClientRect();
+    const fixedRight=origin[0]+rect.width, fixedBottom=origin[1]+rect.height;
+    const snap=v=>Math.round(v/gridStep)*gridStep;
+    let size,position;
     const controller=new AbortController(), options={signal:controller.signal};
     let moving=false, frame=0, pointer=e;
     target.setPointerCapture(e.pointerId);
     function update(){
       if(resizing){
-        const [width,height]=sizeAt();
-        card.style.width=width+'px';card.style.height=height+'px';
+        const canvas=$('#board').getBoundingClientRect();
+        const dx=pointer.clientX-start[0]+boardRect.left-canvas.left;
+        const dy=pointer.clientY-start[1]+boardRect.top-canvas.top;
+        let width=snap(rect.width+(edge.includes('e')?dx:edge.includes('w')?-dx:0));
+        if(edge.includes('w'))width=Math.min(width,snap(fixedRight));
+        width=Math.max(220,Math.min(10000,width));
+        card.style.width=width+'px';
+        card.style.minHeight='0px';
+        const naturalHeight=Math.ceil(card.getBoundingClientRect().height/gridStep)*gridStep;
+        let height=snap(rect.height+(edge.includes('s')?dy:edge.includes('n')?-dy:0));
+        if(edge.includes('n'))height=Math.min(height,snap(fixedBottom));
+        height=Math.max(100,naturalHeight,Math.min(10000,height));
+        card.style.minHeight=height+'px';
+        size=[width,Math.min(10000,height)];
+        position=[edge.includes('w')?Math.max(0,snap(fixedRight-width)):origin[0],
+          edge.includes('n')?Math.max(0,snap(fixedBottom-height)):origin[1]];
+        positionCard(card,position);
       }else positionCard(card,pointFor(pointer,offset));
     }
     function scrollAtEdge(){
@@ -190,19 +233,21 @@ function enableCardDrag(card,id,kind) {
       if(target.hasPointerCapture(e.pointerId))target.releasePointerCapture(e.pointerId);
       if(!moving)return;
       card.classList.remove('moving');
-      const rollback=()=>{[card.style.left,card.style.top,card.style.width,card.style.height]=previous;};
+      const rollback=()=>{[card.style.left,card.style.top,card.style.width,card.style.minHeight]=previous;};
       if(!commit || !card.isConnected || busy){rollback();return;}
       const point=pointFor(pointer,offset);
       update();
-      let pending;
-      if(resizing){
-        const next=structuredClone(p);
-        (next.entities[here()].sizes??={})[id]=sizeAt();pending=save(next);
-      }else if(kind==='entities')pending=place(id,point);
-      else{
-        const next=structuredClone(p);
-        setLayerPoint(next,here(),kind,id,point);pending=save(next);
+      const next=structuredClone(p),parent=next.entities[here()];
+      const finalPoint=resizing?position:point;
+      if(kind==='entities'){
+        const layout=branchLayout(parent,tab);
+        (layout.positions??={})[id]=finalPoint;
+        if(size)(layout.sizes??={})[id]=size;
+      }else{
+        setLayerPoint(next,here(),kind,id,finalPoint);
+        if(size)((parent.layerSizes??={})[kind]??={})[id]=size;
       }
+      const pending=save(next);
       Promise.resolve(pending).then(()=>{if(card.isConnected)rollback();});
     }
     target.addEventListener('pointermove',event=>{
@@ -254,7 +299,7 @@ export function outbound(id,project=p) {
 function eventDetail(id) {
   const e=p.events[id];
   modal(e.name,btn(e.ownerPath?pathLabel(p,e.ownerPath):p.entities[e.owner].name,()=>go(e.owner,e.ownerPath),'link'),el('p',{},e.desc),
-    el('h3',{},'Условия'),describeRule(e.conditions),el('h3',{},'Причины'),describeRule(e.causes),
+    el('h3',{},'Условия'),describeRule(e.conditions,e),el('h3',{},'Причины'),describeRule(e.causes,e),
     el('h3',{},'Последствия'),...e.effects.map((s,i)=>btn(fullState(s,e.effectPaths?.[i]),()=>stateDetail(s,e.effectPaths?.[i]),'effect')),
     ...outbound(id).map(k=>btn('Вызвать событие → '+fullEvent(k),()=>eventDetail(k),'effect')),
     e.effects.length+outbound(id).length?el('span'):blank('Последствий пока нет'),
@@ -311,31 +356,44 @@ function scopePath(owner){
 export function currentOwnerPath(owner){return scopePath(owner);}
 function editCardFields(container,type,id,focusField='name',owner=here(),point=null){
   const obj=id?p[type][id]:{name:'',desc:''};
-  const existing=container.querySelector(':scope > .inline-fields');
-  if(existing){existing.querySelector('[name="'+focusField+'"]').focus();return;}
-  const name=el('input',{name:'name',value:obj.name,required:true,placeholder:'Название',ariaLabel:'Название'});
-  const desc=el('textarea',{name:'desc',value:obj.desc,rows:2,placeholder:'Описание',ariaLabel:'Описание'});
+  container.querySelector('.inline-fields')?.remove();
+  for(const hidden of container.querySelectorAll('[data-edit-hidden]')){hidden.hidden=false;delete hidden.dataset.editHidden;}
+  const values={};
+  for(const field of (id?[focusField]:['name','desc'])){
+    values[field]=el('textarea',{name:field,value:obj[field],rows:field==='name'?1:2,
+      required:field==='name',placeholder:field==='name'?'Название':'Описание'});
+  }
   const form=el('form',{class:'inline-fields',onsubmit:e=>{
-    e.preventDefault();
-    if(!name.value.trim()){name.focus();return;}
+    e.preventDefault();if(busy)return;
     const next=structuredClone(p), key=id || uid();
     if(!id){next.states[key]={owner};if(point)setLayerPoint(next,owner,'states',key,point);}
-    Object.assign(next[type][key],{name:name.value.trim(),desc:desc.value});
+    for(const [field,input] of entries(values)){
+      if(field==='name' && !input.value.trim()){input.focus();return;}
+      next[type][key][field]=input.value;
+    }
     save(next);
-  }},name,desc,el('div',{class:'addrow'},el('button',{type:'submit',class:'primary'},'Сохранить'),btn('Отмена',render)));
-  form.onkeydown=e=>{if(e.key==='Escape'){e.stopPropagation();render();}};
-  const displayFields=[...container.children].filter(child=>child.classList.contains('editable'));
-  if(id && displayFields.length){
-    displayFields[0].before(form);
-    for(const field of displayFields)field.hidden=true;
+  }},...Object.values(values));
+  if(!id)form.append(el('button',{type:'submit',class:'primary'},'Создать состояние'));
+  form.onkeydown=e=>{
+    if(e.isComposing)return;
+    if(e.key==='Enter' && !e.shiftKey){e.preventDefault();form.requestSubmit();}
+    if(e.key==='Escape'){e.stopPropagation();render();}
+  };
+  const activeField=id && container.querySelector('[data-field="'+focusField+'"]');
+  if(activeField){
+    activeField.after(form);
+    activeField.hidden=true;activeField.dataset.editHidden='1';
   }else container.append(form);
-  const active=focusField==='desc'?desc:name;
-  active.focus();active.select();
+  values[focusField].focus();values[focusField].select();
+}
+function fieldButton(text,container,type,id,field,cls){
+  const button=btn(text,()=>editCardFields(container,type,id,field),cls+' editable');
+  button.dataset.field=field;return button;
 }
 function cardText(container,type,id){
   const obj=p[type][id];
-  container.append(btn(obj.name,()=>editCardFields(container,type,id),'cardtitle editable'),
-    btn(obj.desc || 'Добавить описание',()=>editCardFields(container,type,id,'desc'),'carddesc editable'));
+  container.append(fieldButton(obj.name,container,type,id,'name','cardtitle'),
+    fieldButton(obj.desc || 'Добавить описание',container,type,id,'desc','carddesc'));
 }
 function addObject(owner=here(),point=null,host=null) {
   if(stateCanvas)go(owner,scopePath(owner));
@@ -344,7 +402,7 @@ function addObject(owner=here(),point=null,host=null) {
   if(!host){
     const board=$('#board'), view=$('#content');
     const old=board.querySelector('.state-draft');
-    if(old){old.querySelector('input')?.focus();return;}
+    if(old){old.querySelector('textarea')?.focus();return;}
     point??=[view.scrollLeft+25,view.scrollTop+25].map(v=>Math.round(v/5)*5);
     host=el('article',{class:'spacecard owncard states state-draft'});
     positionCard(host,point);board.append(host);
@@ -364,25 +422,31 @@ function drawActions() {
     return;
   }
   bar.append(btn(tab==='states'?'＋ Состояние':'＋ Событие',()=>addObject(),'primary'));
-  if(tab==='events')bar.append(btn('Связи систем',showRelations));
+  if(tab==='events')bar.append(btn('Глобальные события',globalEvents),btn('Связи систем',showRelations));
 
+}
+function globalEvents(){
+  const list=entries(p.events).filter(([,event])=>event.scope==='global');
+  modal('Глобальные события',...list.map(([id,e])=>btn(e.name,()=>editEvent(e.owner,id),'effect')),
+    footer(btn('＋ Глобальное событие',()=>editEvent('root',null,null,'global'),'primary')));
 }
 function canvasCard(id,owners,point) {
   const entity=p.entities[id], card=el('article',{class:'spacecard '+(tab==='entities'?'entity':tab)});
   card.style.left=point[0]+'px';card.style.top=point[1]+'px';
   const enter=()=>go(id,[...path,id]);
   const body=el('div',{class:'card-body'});
-  const open=btn('Открыть холст ↗',enter,'open-canvas');
-  cardText(body,'entities',id);
+  const open=btn('↗',enter,'open-canvas corner-open');
+  open.title='Открыть холст';open.setAttribute('aria-label','Открыть холст '+entity.name);
+  if(tab==='entities')cardText(body,'entities',id);
+  else body.append(el('strong',{class:'branch-title'},entity.name));
   if(tab==='entities') {
     const unlink=btn('×',()=>{
       const next=structuredClone(p), parent=next.entities[here()];
       parent.children=parent.children.filter(key=>key!==id);
-      if(parent.positions)delete parent.positions[id];
-      if(parent.sizes)delete parent.sizes[id];
+      clearPlacement(parent,id);
       save(next);
     },'unlink'); unlink.title='Убрать отсюда';unlink.setAttribute('aria-label','Убрать '+entity.name+' отсюда');
-    body.prepend(el('div',{class:'cardtools'},open,unlink));
+    body.append(unlink);
     body.append(el('div',{class:'meta'},'Состояний '+count(p.states,id)+' · Событий '+count(p.events,id)));
     if(entity.children.length){
       const key=here()+'/'+id;
@@ -401,7 +465,7 @@ function canvasCard(id,owners,point) {
       showChildren();body.append(toggle,list);
     }
   } else {
-    body.prepend(open);
+
     const byOwner=new Map(owners.map(key=>[key,[]]));
     const branch=[...path,id];
     for(const [key,obj] of entries(p[tab])){
@@ -420,10 +484,7 @@ function canvasCard(id,owners,point) {
       owner===id?null:el('small',{},p.entities[owner].name),el('div',{class:'chips'},items)));
     body.append(el('footer',{},btn(tab==='states'?'+ Состояние':'+ Событие',()=>addObject(id,null,body))));
   }
-  const size=p.entities[here()].sizes?.[id];
-  if(size){card.style.width=size[0]+'px';card.style.height=size[1]+'px';}
-  const grip=el('span',{class:'resize-grip',title:'Изменить размер'});
-  card.append(body,grip);enableCardDrag(card,id,'entities');
+  body.append(open);card.append(body);prepareCard(card,id,'entities');
   return card;
 }
 function objectCard(id,obj,point){
@@ -431,12 +492,13 @@ function objectCard(id,obj,point){
   positionCard(card,point);
   if(tab==='states'){
     cardText(card,'states',id);
-    card.append(btn('Открыть холст ↗',()=>openStateCanvas(id),'open-canvas'));
+    const open=btn('↗',()=>openStateCanvas(id),'open-canvas corner-open');
+    open.title='Открыть холст состояния';open.setAttribute('aria-label',open.title);card.append(open);
   }else{
     card.append(btn(obj.name,()=>eventDetail(id),'cardtitle'),el('p',{},obj.desc));
     card.onclick=e=>{if(!e.target.closest('button'))eventDetail(id);};
   }
-  enableCardDrag(card,id,tab);
+  prepareCard(card,id,tab);
   return card;
 }
 function renderBoard() {
@@ -445,7 +507,7 @@ function renderBoard() {
   const availableWidth=$('#content').clientWidth;
   const columns=Math.max(1,Math.floor((availableWidth-24)/254));
   const cards=ids.map((id,i)=>{
-    const point=parent.positions?.[id] || [25+i%columns*255,25+Math.floor(i/columns)*240];
+    const point=branchLayout(parent,tab).positions?.[id] || [25+i%columns*255,25+Math.floor(i/columns)*240];
     return {point,card:canvasCard(id,groups.get(id),point)};
   });
   if(tab!=='entities'){
@@ -465,7 +527,7 @@ function renderBoard() {
     }
   }
   let width=Math.max(1200,availableWidth+480),height=Math.max(900,$('#content').clientHeight+300);
-  for(const {point,card} of cards){width=Math.max(width,point[0]+(parseInt(card.style.width)||250)+300);height=Math.max(height,point[1]+(parseInt(card.style.height)||250)+300);}
+  for(const {point,card} of cards){width=Math.max(width,point[0]+(parseInt(card.style.width)||250)+300);height=Math.max(height,point[1]+(parseInt(card.style.minHeight)||250)+300);}
   board.style.width=width+'px';board.style.height=height+'px';
   board.replaceChildren(...cards.map(item=>item.card));
   if(!cards.length)board.append(el('div',{class:'boardhint'},el('strong',{},'Пустой холст'),
@@ -475,10 +537,10 @@ function render() {
   const id=here(),entity=p.entities[id];
   const current=stateCanvas?p.states[stateCanvas]:entity;
   const header=$('.context>div');
-  header.querySelector(':scope > .inline-fields')?.remove();
+  header.querySelector('.inline-fields')?.remove();
   const type=stateCanvas?'states':'entities', key=stateCanvas || id;
-  $('#title').replaceChildren(btn(current.name,()=>editCardFields(header,type,key),'editable header-field'));
-  $('#description').replaceChildren(btn(current.desc || 'Добавить описание',()=>editCardFields(header,type,key,'desc'),'editable header-field'));
+  $('#title').replaceChildren(fieldButton(current.name,header,type,key,'name','header-field'));
+  $('#description').replaceChildren(fieldButton(current.desc || 'Добавить описание',header,type,key,'desc','header-field'));
   $('#topproject').textContent=p.entities.root.name;
   $('#crumbs').replaceChildren(...path.flatMap((key,i)=>[...(i?[' / ']:[]),btn(p.entities[key].name,()=>go(key,path.slice(0,i+1)),'crumb')]));
   if(stateCanvas)$('#crumbs').append(' / ',current.name);
