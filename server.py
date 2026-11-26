@@ -11,7 +11,7 @@ BASE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("DATA_DIR", BASE / "data"))
 DB = DATA / "editor.sqlite3"
 ASSETS = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
-          "/canvas.css": ("canvas.css", "text/css"), "/editor.js": ("editor.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
+          "/routes.js": ("routes.js", "text/javascript"), "/canvas.css": ("canvas.css", "text/css"), "/editor.js": ("editor.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
 
 
 def require(condition, message):
@@ -47,6 +47,11 @@ def validate(p):
                 and "root" not in children, "Недопустимое вложение")
         positions = entities[key].get("positions", {})
         coordinates(positions, children)
+        sizes = entities[key].get("sizes", {})
+        coordinates(sizes, children)
+        for width, height in sizes.values():
+            require(175 <= width <= 10000 and 100 <= height <= 10000
+                    and width % 5 == height % 5 == 0, "Неверный размер карточки")
         layers = entities[key].get("layers", {})
         require(isinstance(layers, dict) and layers.keys() <= {"states", "events"}, "Неизвестное восприятие")
         for kind, layout in layers.items():
@@ -60,6 +65,21 @@ def validate(p):
         visit(key)
     for obj in [*states.values(), *events.values()]:
         require(obj["owner"] in entities, "Неизвестная сущность")
+
+    def check_path(path, owner):
+        if path is None:  # Older projects refer to the shared entity.
+            return
+        require(isinstance(path, list) and path and path[-1] == owner
+                and all(key in entities for key in path)
+                and all(b in entities[a]["children"] for a, b in zip(path, path[1:])),
+                "Правило ссылается на это размещение. Измените путь в событии перед удалением связи.")
+
+    def paths_for(obj, field, refs):
+        paths = obj.get(field, [None] * len(refs))
+        require(isinstance(paths, list) and len(refs) == len(paths), "Неполная группа путей")
+        for key, path in zip(refs, paths):
+            check_path(path, states[key]["owner"])
+        return paths
 
     def rule(node, kind, outer=False):
         require(type(node["neg"]) is bool, "Неверное отрицание")
@@ -75,16 +95,20 @@ def validate(p):
             refs = node["refs"]
             require(isinstance(refs, list) and refs and all(i in states for i in refs),
                     "Выберите сущности и состояние")
-            require(len({states[i]["owner"] for i in refs}) == len(refs), "Повтор сущности в проверке")
+            paths = paths_for(node, "paths", refs)
+            targets = {(states[key]["owner"], tuple(path or [])) for key, path in zip(refs, paths)}
+            require(len(targets) == len(refs), "Повтор размещения в группе")
         else:
             raise ValueError("Неверный блок правила")
 
     for event in events.values():
+        check_path(event.get("ownerPath"), event["owner"])
         for kind in ("conditions", "causes"):
             require(event[kind]["op"] in ("and", "or"), "Нужна группа правил")
             rule(event[kind], kind, True)
         require(isinstance(event["effects"], list) and all(i in states for i in event["effects"]),
                 "Выберите состояние последствия")
+        paths_for(event, "effectPaths", event["effects"])
 
 
 class Handler(BaseHTTPRequestHandler):

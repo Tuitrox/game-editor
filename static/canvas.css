@@ -12,3 +12,21 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column}header{flex:n
 .children-toggle{display:block;margin:7px 0 0;padding:2px 5px;font-size:12px;color:#375a45}
 .child-list{list-style:none;margin:6px 0 0;padding:0 0 0 10px;border-left:2px solid #d7e2d7}
 .child-list li+li{margin-top:4px}
+#home{background:#29474a;color:#f1f5ee;border-color:#526762;font-size:13px}
+.context{justify-content:flex-start}.context #edit{margin-left:auto}#up{font-size:21px;line-height:1;padding:4px 9px}#up:disabled{opacity:.3}
+.spacecard:has(.resize-grip){max-height:none;padding:0;overflow:hidden;display:flex;flex-direction:column}
+.card-body{padding:12px 14px 19px;overflow:auto;min-height:0;max-height:inherit}
+.resize-grip{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;touch-action:none;background:repeating-linear-gradient(135deg,transparent 0 3px,#739181 3px 4px);clip-path:polygon(100% 0,100% 100%,0 100%)}
+.open-canvas{font-size:11px;padding:3px 6px;color:#375a45}
+.carddesc{background:transparent;border:0;display:block;text-align:left;white-space:pre-wrap;color:var(--dim);font-size:13px;font-weight:400;padding:4px 0;margin:2px 0 6px}
+.editable:hover{text-decoration:underline;text-decoration-style:dotted;cursor:text}
+.spacecard .children-toggle{background:transparent;border:0;border-radius:0;display:flex;gap:6px;align-items:center;width:100%;padding:2px 0}
+.children-toggle:before,.children-toggle:after{content:'';height:1px;background:#b9cabc;flex:1}.child-list{font-size:13px}
+.inline-fields{display:grid;gap:6px;margin-top:8px;touch-action:auto}.inline-fields input,.inline-fields textarea{width:100%;min-width:0}
+.state-draft{z-index:5}.state-workspace{margin:20px;padding:18px;max-width:580px;border-radius:12px;background:#fff;border:1px solid var(--line)}
+.picker-panel{margin:6px 0;padding:7px;background:white;border:1px solid var(--line);border-radius:7px}
+.picker-panel input{width:100%}.picker-results{max-height:210px;overflow:auto}.picker-results .choice{display:block;width:100%;text-align:left;border:0;padding:6px;font-size:13px}.search-picker{margin:6px 0}.pick-trigger{font-size:13px}.emitter p{margin:3px 0}
+.header-field{color:inherit;background:transparent;border:0;padding:0;font:inherit;text-align:left}
+.mini-state{padding:7px 8px;width:100%;background:#f4f7f4;border-left:2px solid #9ebbc1}
+.mini-state .cardtitle{font-size:14px}.folder-up{color:#51725e}.folder{color:#294e44}
+.spacecard .children-toggle:focus-visible,.resize-grip:focus-visible{outline:2px solid #567d57}

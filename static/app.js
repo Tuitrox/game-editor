@@ -1,5 +1,6 @@
-import {editEvent, leaves, describeRule, removeCause, triggers} from './editor.js';
+import {editEvent, leaves, describeRule, removeCause, triggers, fullEvent, fullState} from './editor.js';
 
+import {pathLabel} from './routes.js';
 const $ = s => document.querySelector(s);
 export function el(tag, props = {}, ...kids) {
   const node = document.createElement(tag);
@@ -18,6 +19,7 @@ export const entries = obj => Object.entries(obj);
 export const uid = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b=>b.toString(16).padStart(2,'0')).join('');
 export let p;
 let version, projectId, busy=false, path=['root'], tab='entities', picked=null;
+let stateCanvas=null;
 let clipboardDrag=null, loadSequence=0;
 const gridStep=5;
 const expandedCards=new Set();
@@ -31,19 +33,27 @@ export function descendants(id) {
   }
   return seen;
 }
-function pathTo(id) {
-  const paths=[['root']], seen=new Set();
-  for (const route of paths) {
+function pathTo(id,start=null) {
+  const nested=new Set(Object.values(p.entities).flatMap(e=>e.children));
+  const paths=start?[start]:Object.keys(p.entities).filter(k=>!nested.has(k)).map(k=>[k]), seen=new Set();
+  for(const route of paths){
     const key=route.at(-1);
-    if (key===id) return route;
-    if (seen.has(key)) continue;
+    if(key===id)return route;
+    if(seen.has(key))continue;
     seen.add(key);
-    for (const child of p.entities[key].children) paths.push([...route,child]);
+    for(const child of p.entities[key].children)paths.push([...route,child]);
   }
   return [id];
 }
+function eventInBranch(event,branch){
+  if(!event.ownerPath)return descendants(branch.at(-1)).has(event.owner);
+  const anchor=event.ownerPath[0], index=branch.indexOf(anchor);
+  if(index<0)return descendants(branch.at(-1)).has(anchor);
+  return branch.slice(index).every((key,i)=>event.ownerPath[i]===key);
+}
 function go(id, route) {
   picked=null;
+  stateCanvas=null;
   path=route || pathTo(id);
   $('#content').scrollTo(0,0);
   if ($('dialog').open) $('dialog').close();
@@ -110,9 +120,10 @@ export function deleteObj(type,id) {
   if(type==='entities') for(const ent of Object.values(next.entities)) {
     ent.children=ent.children.filter(c=>c!==id);
     if(ent.positions)delete ent.positions[id];
+    if(ent.sizes)delete ent.sizes[id];
   }
   if(type==='events') for(const evt of Object.values(next.events)) removeCause(evt.causes,id);
-  save(next,()=>{if(type==='entities' && path.includes(id))path=['root'];});
+  save(next,()=>{if(type==='states' && stateCanvas===id)stateCanvas=null;if(type==='entities' && path.includes(id))path=['root'];});
 }
 const tabs={entities:'Сущности',states:'Состояния',events:'События'};
 const poolTitles={entities:'Пул сущностей',states:'Состояния раздела',events:'События раздела'};
@@ -150,16 +161,22 @@ function enableCardDrag(card,id,kind) {
   card.addEventListener('pointerdown',e=>{
     if(!e.isPrimary || e.button!==0)return;
     suppressClick=false;
-    if(busy || e.target.closest('button:not(.cardtitle),.child-list'))return;
+    const resizing=e.target.closest('.resize-grip');
+    if(busy || (!resizing && kind==='entities' && tab!=='entities') || (!resizing && e.target.closest('button,input,textarea,form,.child-list')))return;
     const target=e.target;
     const start=[e.clientX,e.clientY], rect=card.getBoundingClientRect();
     const offset=[e.clientX-rect.left,e.clientY-rect.top];
-    const previous=[card.style.left,card.style.top];
+    const previous=[card.style.left,card.style.top,card.style.width,card.style.height];
+    const sizeAt=()=>[rect.width+pointer.clientX-start[0],rect.height+pointer.clientY-start[1]]
+      .map((value,i)=>Math.max(i===0?175:100,Math.min(10000,Math.round(value/gridStep)*gridStep)));
     const controller=new AbortController(), options={signal:controller.signal};
     let moving=false, frame=0, pointer=e;
     target.setPointerCapture(e.pointerId);
     function update(){
-      positionCard(card,pointFor(pointer,offset));
+      if(resizing){
+        const [width,height]=sizeAt();
+        card.style.width=width+'px';card.style.height=height+'px';
+      }else positionCard(card,pointFor(pointer,offset));
     }
     function scrollAtEdge(){
       if(!card.isConnected){finish(false);return;}
@@ -173,12 +190,15 @@ function enableCardDrag(card,id,kind) {
       if(target.hasPointerCapture(e.pointerId))target.releasePointerCapture(e.pointerId);
       if(!moving)return;
       card.classList.remove('moving');
-      const rollback=()=>{[card.style.left,card.style.top]=previous;};
+      const rollback=()=>{[card.style.left,card.style.top,card.style.width,card.style.height]=previous;};
       if(!commit || !card.isConnected || busy){rollback();return;}
       const point=pointFor(pointer,offset);
-      positionCard(card,point);
+      update();
       let pending;
-      if(kind==='entities')pending=place(id,point);
+      if(resizing){
+        const next=structuredClone(p);
+        (next.entities[here()].sizes??={})[id]=sizeAt();pending=save(next);
+      }else if(kind==='entities')pending=place(id,point);
       else{
         const next=structuredClone(p);
         setLayerPoint(next,here(),kind,id,point);pending=save(next);
@@ -214,6 +234,7 @@ function renderPool() {
   const rows=[], scope=descendants(here());
   for(const [id,obj] of entries(p[tab])) {
     if(tab==='entities' ? id==='root' : !scope.has(obj.owner))continue;
+    if(tab==='events' && !eventInBranch(obj,path))continue;
     if(!obj.name.toLocaleLowerCase().includes(needle))continue;
     const b=btn(obj.name,()=>tab==='entities'?choose(id):tab==='states'?stateDetail(id):eventDetail(id),'poolitem');
     b.prepend(el('span',{class:'symbol'},tab==='entities'?'◇':tab==='states'?'◉':'↯'));
@@ -226,48 +247,47 @@ function renderPool() {
   }
   $('#pool').replaceChildren(...(rows.length?rows:[el('p',{class:'emptyPool'},needle?'Ничего не найдено':'Пока пусто. Нажмите ＋, чтобы добавить объект.')]));
 }
-function stateDetail(id) {
-  const s=p.states[id];
-  const related=(title,check)=>{
-    const list=entries(p.events).filter(([,ev])=>check(ev));
-    return el('section',{},el('h3',{},title),list.length?list.map(([key,e])=>btn(p.entities[e.owner].name+' / '+e.name,()=>eventDetail(key),'link')):blank('Нет связанных событий'));
-  };
-  modal(s.name,btn(p.entities[s.owner].name,()=>go(s.owner),'link'),el('p',{},s.desc),
-    related('Переводят в это состояние',e=>e.effects.includes(id)),
-    related('Проверяют это состояние',e=>leaves(e.conditions).some(n=>n.refs.includes(id))),
-    footer(btn('Редактировать',()=>openBasic('states',id),'primary')));
-}
+function stateDetail(id,route){openStateCanvas(id,route);}
 export function outbound(id,project=p) {
   return entries(project.events).filter(([,e])=>triggers(e.causes).includes(id)).map(([key])=>key);
 }
 function eventDetail(id) {
   const e=p.events[id];
-  modal(e.name,btn(p.entities[e.owner].name,()=>go(e.owner),'link'),el('p',{},e.desc),
+  modal(e.name,btn(e.ownerPath?pathLabel(p,e.ownerPath):p.entities[e.owner].name,()=>go(e.owner,e.ownerPath),'link'),el('p',{},e.desc),
     el('h3',{},'Условия'),describeRule(e.conditions),el('h3',{},'Причины'),describeRule(e.causes),
-    el('h3',{},'Последствия'),...e.effects.map(s=>btn(p.entities[p.states[s].owner].name+' → '+p.states[s].name,()=>stateDetail(s),'effect')),
-    ...outbound(id).map(k=>btn('Вызвать событие → '+p.events[k].name,()=>eventDetail(k),'effect')),
+    el('h3',{},'Последствия'),...e.effects.map((s,i)=>btn(fullState(s,e.effectPaths?.[i]),()=>stateDetail(s,e.effectPaths?.[i]),'effect')),
+    ...outbound(id).map(k=>btn('Вызвать событие → '+fullEvent(k),()=>eventDetail(k),'effect')),
     e.effects.length+outbound(id).length?el('span'):blank('Последствий пока нет'),
     footer(btn('Редактировать правило',()=>editEvent(e.owner,id),'primary')));
 }
 export {eventDetail,stateDetail};
-function showRelations(scope) {
-
+function showRelations() {
   const edges=new Map();
-  function add(from,to,ev,text) {
-    if(from===to || (!scope.has(from)&&!scope.has(to)))return;
-    const k=from+'/'+to;if(!edges.has(k))edges.set(k,{from,to,details:[]});
-    edges.get(k).details.push(btn(text,()=>eventDetail(ev),'link'));
+  function add(source,target,eventId,reason){
+    const [from,fromRoute]=source, [to,toRoute]=target;
+    if(from===to && (fromRoute || []).join('/')===(toRoute || []).join('/'))return;
+    if(!eventInBranch({owner:from,ownerPath:fromRoute},path) && !eventInBranch({owner:to,ownerPath:toRoute},path))return;
+    const key=JSON.stringify([source,target]);
+    const format=(id,route)=>route?pathLabel(p,route):p.entities[id].name;
+    if(!edges.has(key)){
+      const links=[source,target].filter(([owner,route])=>!eventInBranch({owner,ownerPath:route},path))
+        .map(([owner,route])=>btn('Открыть '+format(owner,route)+' ↗',()=>go(owner,route),'link'));
+      edges.set(key,{name:format(from,fromRoute)+' → '+format(to,toRoute),rules:[],links});
+    }
+    edges.get(key).rules.push(btn(reason,()=>eventDetail(eventId),'link'));
   }
-  for(const [id,e] of entries(p.events)) {
-    for(const n of leaves(e.causes)) {const source=p.events[n.ref];add(source.owner,e.owner,id,source.name+' · в причинах «'+e.name+'»');}
-    for(const n of leaves(e.conditions)) for(const s of n.refs) add(p.states[s].owner,e.owner,id,p.states[s].name+' · условие для «'+e.name+'»');
-    for(const s of e.effects) add(e.owner,p.states[s].owner,id,e.name+' → '+p.states[s].name);
+  for(const [id,event] of entries(p.events)){
+    const emitter=[event.owner,event.ownerPath];
+    for(const n of leaves(event.causes)){
+      const source=p.events[n.ref];
+      add([source.owner,source.ownerPath],emitter,id,source.name+' · в причинах «'+event.name+'»');
+    }
+    for(const n of leaves(event.conditions))n.refs.forEach((s,i)=>
+      add([p.states[s].owner,n.paths?.[i]],emitter,id,p.states[s].name+' · условие для «'+event.name+'»'));
+    event.effects.forEach((s,i)=>add(emitter,[p.states[s].owner,event.effectPaths?.[i]],id,event.name+' → '+p.states[s].name));
   }
-  const sections=[];
-  if(edges.size) sections.push(el('h3',{class:'subtitle'},'Связи систем'),...Array.from(edges.values(),edge=>
-    el('details',{class:'relation'},el('summary',{},p.entities[edge.from].name+' → '+p.entities[edge.to].name),...edge.details,
-      ...[edge.from,edge.to].filter(id=>!scope.has(id)).map(id=>btn('Открыть '+p.entities[id].name+' ↗',()=>go(id),'link')))));
-  modal('Связи систем',...(sections.length?sections.slice(1):[blank('Между сущностями в этом разделе пока нет связей.')]));
+  modal('Связи систем',...(edges.size?[...edges.values()].map(edge=>
+    el('details',{class:'relation'},el('summary',{},edge.name),...edge.rules,...edge.links)):[blank('Между сущностями в этом разделе пока нет связей.')]));
 }
 function branchOwners(children) {
   // Prefer the nearest visible branch when two branches share a descendant.
@@ -280,14 +300,61 @@ function branchOwners(children) {
   }
   return owners;
 }
-function openObject(id) { if(tab==='states')stateDetail(id);else eventDetail(id); }
+
 export function setLayerPoint(project,owner,kind,key,point){
   const layers=project.entities[owner].layers??={};
   (layers[kind]??={})[key]=point;
 }
-function addObject(owner=here(),point=null) {
-  if(tab==='events')editEvent(owner,null,point);
-  else openBasic(tab,null,owner,point);
+function scopePath(owner){
+  return owner===here()?path.slice():p.entities[here()].children.includes(owner)?[...path,owner]:pathTo(owner);
+}
+export function currentOwnerPath(owner){return scopePath(owner);}
+function editCardFields(container,type,id,focusField='name',owner=here(),point=null){
+  const obj=id?p[type][id]:{name:'',desc:''};
+  const existing=container.querySelector(':scope > .inline-fields');
+  if(existing){existing.querySelector('[name="'+focusField+'"]').focus();return;}
+  const name=el('input',{name:'name',value:obj.name,required:true,placeholder:'Название',ariaLabel:'Название'});
+  const desc=el('textarea',{name:'desc',value:obj.desc,rows:2,placeholder:'Описание',ariaLabel:'Описание'});
+  const form=el('form',{class:'inline-fields',onsubmit:e=>{
+    e.preventDefault();
+    if(!name.value.trim()){name.focus();return;}
+    const next=structuredClone(p), key=id || uid();
+    if(!id){next.states[key]={owner};if(point)setLayerPoint(next,owner,'states',key,point);}
+    Object.assign(next[type][key],{name:name.value.trim(),desc:desc.value});
+    save(next);
+  }},name,desc,el('div',{class:'addrow'},el('button',{type:'submit',class:'primary'},'Сохранить'),btn('Отмена',render)));
+  form.onkeydown=e=>{if(e.key==='Escape'){e.stopPropagation();render();}};
+  const displayFields=[...container.children].filter(child=>child.classList.contains('editable'));
+  if(id && displayFields.length){
+    displayFields[0].before(form);
+    for(const field of displayFields)field.hidden=true;
+  }else container.append(form);
+  const active=focusField==='desc'?desc:name;
+  active.focus();active.select();
+}
+function cardText(container,type,id){
+  const obj=p[type][id];
+  container.append(btn(obj.name,()=>editCardFields(container,type,id),'cardtitle editable'),
+    btn(obj.desc || 'Добавить описание',()=>editCardFields(container,type,id,'desc'),'carddesc editable'));
+}
+function addObject(owner=here(),point=null,host=null) {
+  if(stateCanvas)go(owner,scopePath(owner));
+  if(tab==='events')return editEvent(owner,null,point);
+  if(tab==='entities')return openBasic(tab,null,owner);
+  if(!host){
+    const board=$('#board'), view=$('#content');
+    const old=board.querySelector('.state-draft');
+    if(old){old.querySelector('input')?.focus();return;}
+    point??=[view.scrollLeft+25,view.scrollTop+25].map(v=>Math.round(v/5)*5);
+    host=el('article',{class:'spacecard owncard states state-draft'});
+    positionCard(host,point);board.append(host);
+  }
+  editCardFields(host,'states',null,'name',owner,point);
+}
+function openStateCanvas(id,ownerRoute){
+  const owner=p.states[id].owner;
+  go(owner,ownerRoute || scopePath(owner));
+  tab='states';stateCanvas=id;render();
 }
 function drawActions() {
   const bar=$('#actions'); bar.replaceChildren();
@@ -297,28 +364,30 @@ function drawActions() {
     return;
   }
   bar.append(btn(tab==='states'?'＋ Состояние':'＋ Событие',()=>addObject(),'primary'));
-  if(tab==='events')bar.append(btn('Связи систем',()=>showRelations(descendants(here()))));
+  if(tab==='events')bar.append(btn('Связи систем',showRelations));
 
 }
 function canvasCard(id,owners,point) {
   const entity=p.entities[id], card=el('article',{class:'spacecard '+(tab==='entities'?'entity':tab)});
   card.style.left=point[0]+'px';card.style.top=point[1]+'px';
   const enter=()=>go(id,[...path,id]);
-  const title=btn(entity.name,enter,'cardtitle');
+  const body=el('div',{class:'card-body'});
+  const open=btn('Открыть холст ↗',enter,'open-canvas');
+  cardText(body,'entities',id);
   if(tab==='entities') {
     const unlink=btn('×',()=>{
       const next=structuredClone(p), parent=next.entities[here()];
       parent.children=parent.children.filter(key=>key!==id);
       if(parent.positions)delete parent.positions[id];
+      if(parent.sizes)delete parent.sizes[id];
       save(next);
     },'unlink'); unlink.title='Убрать отсюда';unlink.setAttribute('aria-label','Убрать '+entity.name+' отсюда');
-    card.append(el('div',{class:'cardtools'},title,unlink),el('p',{},entity.desc),
-      el('div',{class:'meta'},'Вложено '+entity.children.length+' · Состояний '+count(p.states,id)+' · Событий '+count(p.events,id)));
-    card.onclick=e=>{if(!e.target.closest('button'))enter();};
+    body.prepend(el('div',{class:'cardtools'},open,unlink));
+    body.append(el('div',{class:'meta'},'Состояний '+count(p.states,id)+' · Событий '+count(p.events,id)));
     if(entity.children.length){
       const key=here()+'/'+id;
       const list=el('ul',{class:'child-list'},...entity.children.map(child=>
-        el('li',{},btn(p.entities[child].name,()=>go(child,[...path,id,child]),'link'))));
+        el('li',{},p.entities[child].name)));
       const toggle=btn('',()=>{
         if(expandedCards.has(key))expandedCards.delete(key);else expandedCards.add(key);
         showChildren();
@@ -326,28 +395,47 @@ function canvasCard(id,owners,point) {
       function showChildren(){
         const open=expandedCards.has(key);
         toggle.setAttribute('aria-expanded',String(open));
-        toggle.textContent=(open?'▾ Скрыть':'▸ Вложения')+' · '+entity.children.length;
+        toggle.textContent=(open?'▾ ':'▸ ')+'Сущности';
         list.hidden=!open;
       }
-      showChildren();card.append(toggle,list);
+      showChildren();body.append(toggle,list);
     }
-    enableCardDrag(card,id,'entities');
   } else {
-    card.append(title);
+    body.prepend(open);
     const byOwner=new Map(owners.map(key=>[key,[]]));
-    for(const [key,obj] of entries(p[tab]))byOwner.get(obj.owner)?.push(btn(obj.name,()=>openObject(key),'chip'));
-    for(const [owner,items] of byOwner)if(items.length)card.append(el('section',{},
+    const branch=[...path,id];
+    for(const [key,obj] of entries(p[tab])){
+      if(tab==='events' && obj.ownerPath){
+        if(!eventInBranch(obj,branch))continue;
+        if(!byOwner.has(obj.owner))byOwner.set(obj.owner,[]);
+      }
+      if(!byOwner.has(obj.owner))continue;
+      if(tab==='states'){
+        const mini=el('div',{class:'mini-state'});
+        cardText(mini,'states',key);mini.append(btn('Открыть холст ↗',()=>openStateCanvas(key,pathTo(obj.owner,branch)),'open-canvas'));
+        byOwner.get(obj.owner).push(mini);
+      }else byOwner.get(obj.owner).push(btn(obj.name,()=>eventDetail(key),'chip'));
+    }
+    for(const [owner,items] of byOwner)if(items.length)body.append(el('section',{},
       owner===id?null:el('small',{},p.entities[owner].name),el('div',{class:'chips'},items)));
-    card.append(el('footer',{},btn(tab==='states'?'+ Состояние':'+ Событие',()=>addObject(id))));
+    body.append(el('footer',{},btn(tab==='states'?'+ Состояние':'+ Событие',()=>addObject(id,null,body))));
   }
+  const size=p.entities[here()].sizes?.[id];
+  if(size){card.style.width=size[0]+'px';card.style.height=size[1]+'px';}
+  const grip=el('span',{class:'resize-grip',title:'Изменить размер'});
+  card.append(body,grip);enableCardDrag(card,id,'entities');
   return card;
 }
 function objectCard(id,obj,point){
-  const card=el('article',{class:'spacecard owncard '+tab},
-    el('small',{},tab==='states'?'Состояние':'Событие'),
-    btn(obj.name,()=>openObject(id),'cardtitle'),obj.desc?el('p',{},obj.desc):null);
-  card.style.left=point[0]+'px';card.style.top=point[1]+'px';
-  card.onclick=e=>{if(!e.target.closest('button'))openObject(id);};
+  const card=el('article',{class:'spacecard owncard '+tab},el('small',{},tab==='states'?'Состояние':'Событие'));
+  positionCard(card,point);
+  if(tab==='states'){
+    cardText(card,'states',id);
+    card.append(btn('Открыть холст ↗',()=>openStateCanvas(id),'open-canvas'));
+  }else{
+    card.append(btn(obj.name,()=>eventDetail(id),'cardtitle'),el('p',{},obj.desc));
+    card.onclick=e=>{if(!e.target.closest('button'))eventDetail(id);};
+  }
   enableCardDrag(card,id,tab);
   return card;
 }
@@ -363,7 +451,7 @@ function renderBoard() {
   if(tab!=='entities'){
     let slot=0;
     const positions=parent.layers?.[tab] || {};
-    const own=entries(p[tab]).filter(([,obj])=>obj.owner===here());
+    const own=entries(p[tab]).filter(([,obj])=>obj.owner===here() && (tab!=='events' || eventInBranch(obj,path)));
     const occupied=[...cards.map(x=>x.point),...Object.values(positions)];
     for(const [id,obj] of own){
       let point=positions[id];
@@ -377,7 +465,7 @@ function renderBoard() {
     }
   }
   let width=Math.max(1200,availableWidth+480),height=Math.max(900,$('#content').clientHeight+300);
-  for(const {point} of cards){width=Math.max(width,point[0]+550);height=Math.max(height,point[1]+550);}
+  for(const {point,card} of cards){width=Math.max(width,point[0]+(parseInt(card.style.width)||250)+300);height=Math.max(height,point[1]+(parseInt(card.style.height)||250)+300);}
   board.style.width=width+'px';board.style.height=height+'px';
   board.replaceChildren(...cards.map(item=>item.card));
   if(!cards.length)board.append(el('div',{class:'boardhint'},el('strong',{},'Пустой холст'),
@@ -385,14 +473,35 @@ function renderBoard() {
 }
 function render() {
   const id=here(),entity=p.entities[id];
-  $('#title').textContent=entity.name;$('#description').textContent=entity.desc;$('#topproject').textContent=p.entities.root.name;
-  $('#crumbs').replaceChildren(btn('Проекты',home,'crumb'),...path.flatMap((key,i)=>[' / ',btn(p.entities[key].name,()=>go(key,path.slice(0,i+1)),'crumb')]));
-  if(path[0]!=='root')$('#crumbs').append(' / ',btn('К корню',()=>go('root'),'crumb'));
+  const current=stateCanvas?p.states[stateCanvas]:entity;
+  const header=$('.context>div');
+  header.querySelector(':scope > .inline-fields')?.remove();
+  const type=stateCanvas?'states':'entities', key=stateCanvas || id;
+  $('#title').replaceChildren(btn(current.name,()=>editCardFields(header,type,key),'editable header-field'));
+  $('#description').replaceChildren(btn(current.desc || 'Добавить описание',()=>editCardFields(header,type,key,'desc'),'editable header-field'));
+  $('#topproject').textContent=p.entities.root.name;
+  $('#crumbs').replaceChildren(...path.flatMap((key,i)=>[...(i?[' / ']:[]),btn(p.entities[key].name,()=>go(key,path.slice(0,i+1)),'crumb')]));
+  if(stateCanvas)$('#crumbs').append(' / ',current.name);
+  $('#up').disabled=!stateCanvas && path.length<2;
+  $('#up').onclick=()=>stateCanvas?go(id,path.slice()):go(path.at(-2),path.slice(0,-1));
   $('#tabs').replaceChildren(...entries(tabs).map(([key,name])=>{
-    const b=btn(name,()=>{tab=key;picked=null;$('#search').value='';render();},key===tab?'selected':'');
+    const b=btn(name,()=>{stateCanvas=null;tab=key;picked=null;$('#search').value='';render();},key===tab?'selected':'');
     b.setAttribute('aria-pressed',String(key===tab));return b;
   }));
-  drawActions();renderBoard();renderPool();
+  if(stateCanvas){
+    const stateId=stateCanvas;
+    $('#actions').replaceChildren(btn('Удалить состояние',()=>deleteObj('states',stateId),'danger'));
+    const detail=el('section',{class:'state-workspace'});
+    const matches=(ids,routes)=>ids.some((s,i)=>s===stateId && (!routes?.[i] || path.slice(-routes[i].length).join('/')===routes[i].join('/')));
+    for(const [title,match] of [['Проверяется в условиях',e=>leaves(e.conditions).some(n=>matches(n.refs,n.paths))],
+      ['Устанавливается событиями',e=>matches(e.effects,e.effectPaths)]]){
+      detail.append(el('h3',{},title));
+      const related=entries(p.events).filter(([,e])=>match(e));
+      detail.append(...(related.length?related.map(([key,e])=>btn(e.name,()=>eventDetail(key),'chip')):[blank('Пока нет связей')]));
+    }
+    const board=$('#board');board.replaceChildren(detail);board.style.width='100%';board.style.height='100%';
+  }else{drawActions();renderBoard();}
+  renderPool();
 }
 async function request(url,options) {
   const response=await fetch(url,options), result=await response.json();
@@ -417,7 +526,7 @@ async function route(){
   expandedCards.clear();
   if($('dialog').open)$('dialog').close();
   document.body.classList.remove('openpool');
-  $('#studio').hidden=true;$('#poolToggle').hidden=true;$('#library').hidden=Boolean(id);
+  stateCanvas=null;$('#home').hidden=!id;$('#studio').hidden=true;$('#poolToggle').hidden=true;$('#library').hidden=Boolean(id);
   $('#topproject').textContent='';$('#status').textContent='Загрузка…';
   try {
     if(id){
@@ -437,7 +546,8 @@ async function route(){
 $('#home').onclick=home;$('#newProject').onclick=newProject;
 $('#poolToggle').onclick=()=>document.body.classList.toggle('openpool');
 $('#createPool').onclick=()=>addObject();
-$('#search').oninput=renderPool;$('#edit').onclick=()=>openBasic('entities',here());
+$('#search').oninput=renderPool;$('#edit').onclick=()=>stateCanvas?editCardFields($('.context>div'),'states',stateCanvas):openBasic('entities',here());
+
 const board=$('#board');
 board.ondragover=e=>{
   if(!clipboardDrag || tab!=='entities')return;
@@ -457,7 +567,7 @@ board.ondrop=e=>{
   if(drag && !busy && drag.owner===here() && drag.project===projectId && tab==='entities')place(drag.id,pointFor(e));
 };
 board.onclick=e=>{if(picked && !busy)place(picked,pointFor(e));};
-board.ondblclick=e=>{if(e.target===board && tab!=='entities')addObject(here(),pointFor(e));};
+board.ondblclick=e=>{if(!stateCanvas && e.target===board && tab!=='entities')addObject(here(),pointFor(e));};
 document.addEventListener('keydown',e=>{if(e.key==='Escape' && picked && !$('dialog').open){picked=null;render();}});
 window.addEventListener('hashchange',route);
 route();

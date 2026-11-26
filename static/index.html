@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#172e32"><title>Атлас механик</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/canvas.css"></head>
-<body><header><button id="poolToggle" hidden aria-label="Открыть панель объектов">☰</button><button id="home" class="brand"><span class="mark" aria-hidden="true">⌘</span>Атлас механик</button><span class="topproject" id="topproject"></span><span id="status" role="status"></span></header>
+<body><header><button id="poolToggle" hidden aria-label="Открыть панель объектов">☰</button><div class="brand"><span class="mark" aria-hidden="true">⌘</span>Атлас механик</div><span class="topproject" id="topproject"></span><span id="status" role="status"></span><button id="home" hidden>Проекты</button></header>
 <main id="library"><section class="shelfhead"><h1>Проекты</h1><button id="newProject" class="primary">＋ Новый проект</button></section><div id="projects"></div></main>
 <div class="layout" id="studio" hidden><aside><div class="poolhead"><h2 id="pooltitle">Пул сущностей</h2><button id="createPool" aria-label="Создать объект">＋</button></div><input id="search" type="search" placeholder="Поиск…" aria-label="Поиск объектов"><div id="pool"></div></aside>
 <main class="workspace"><div class="toolbar"><nav id="crumbs" aria-label="Путь к сущности"></nav><nav id="tabs" aria-label="Восприятие холста"></nav></div>
-<div class="context"><div><h1 id="title"></h1><p id="description"></p></div><button id="edit">Изменить</button></div>
+<div class="context"><button id="up" type="button" title="На родительский холст" aria-label="На родительский холст">←</button><div><h1 id="title"></h1><p id="description"></p></div><button id="edit">Изменить</button></div>
 <div id="actions"></div><div id="content" tabindex="0" aria-label="Свободный холст"><div id="board"></div></div></main></div>
 <dialog><div id="modal"></div></dialog><div id="toast" role="status"></div><script type="module" src="/app.js"></script></body></html>
