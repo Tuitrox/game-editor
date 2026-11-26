@@ -210,8 +210,13 @@ function selector(items,value,change) {
   control.value=value;return control;
 }
 function normalizeNegations(node){
+  if(!node.items)return node;
   const clean={...node,neg:false};
-  if(node.items)clean.items=node.items.map(normalizeNegations);
+  clean.items=node.items.map(normalizeNegations);
+  if(node.op==='not' && clean.items.length===1 && !clean.items[0].items){
+    const child=clean.items[0];
+    return {...child,neg:node.neg?child.neg:!child.neg};
+  }
   return node.neg?{op:'not',neg:false,items:[clean]}:clean;
 }
 function parameterFields(node){
@@ -244,14 +249,30 @@ function parameterFields(node){
 function ruleBoard(root,kind,event,draw){
   let dragging=null;
   function contains(node,target){return node===target || node.items?.some(child=>contains(child,target));}
+  function pickParameter(panel,apply){
+    if(event.scope==='local'){
+      const params=entries(p.entities[event.owner].parameters || {});
+      panel.append(el('small',{},ownerLabel(event.owner,event.ownerPath)));
+      if(params.length)panel.append(...params.map(([id,param])=>
+        btn(param.name,()=>apply(event.owner,id,event.ownerPath),'choice')));
+      else panel.append(el('p',{class:'empty'},'У этой сущности пока нет параметров. Добавьте параметр на её холсте во вкладке «Сущности».'));
+    }else if(Object.values(p.entities).some(entity=>Object.keys(entity.parameters || {}).length)){
+      panel.append(visualTree('Выбрать параметр',{multiple:false,parameterMode:true,eligible:()=>false,open:true,
+        apply:(route,id)=>apply(route.at(-1),id,route)}));
+    }else panel.append(el('p',{class:'empty'},'В проекте пока нет параметров. Добавьте параметр нужной сущности во вкладке «Сущности».'));
+  }
+  function setParameter(node,owner,ref,path){
+    const type=p.entities[owner].parameters[ref].type || 'number';
+    if(!node.ref || type!==(p.entities[node.owner].parameters[node.ref].type || 'number')){
+      node.compare='eq';
+      node.value=type==='number'?null:type==='boolean'?true:'';
+    }
+    Object.assign(node,{owner,ref,path});
+  }
   function addLeaf(parent,leafType){
     const caption={event:'Выбрать событие-причину',state:'Выбрать состояние',parameter:'Выбрать параметр'}[leafType];
     function insert(child){
       parent.items.push(child);draw();
-    }
-    function insertParameter(owner,ref,path){
-      const type=p.entities[owner].parameters[ref].type || 'number';
-      insert({op:'parameter',neg:false,owner,ref,path,compare:'eq',value:type==='number'?null:type==='boolean'?true:''});
     }
     return el('button',{type:'button',class:'add-leaf',title:caption,ariaLabel:caption,onclick:e=>{
       board.querySelector('.slot-chooser')?.remove();
@@ -260,16 +281,10 @@ function ruleBoard(root,kind,event,draw){
       if(leafType==='event'){
         panel.append(eventPicker(caption,id=>insert({op:'event',neg:false,ref:id}),()=>true,true));
       }else if(leafType==='parameter'){
-        if(event.scope==='local'){
-          const params=entries(p.entities[event.owner].parameters || {});
-          panel.append(el('small',{},ownerLabel(event.owner,event.ownerPath)));
-          if(params.length)panel.append(...params.map(([id,param])=>
-            btn(param.name,()=>insertParameter(event.owner,id,event.ownerPath),'choice')));
-          else panel.append(el('p',{class:'empty'},'У этой сущности пока нет параметров. Добавьте параметр на её холсте во вкладке «Сущности».'));
-        }else if(Object.values(p.entities).some(entity=>Object.keys(entity.parameters || {}).length)){
-          panel.append(visualTree(caption,{multiple:false,parameterMode:true,eligible:()=>false,open:true,
-            apply:(route,id)=>insertParameter(route.at(-1),id,route)}));
-        }else panel.append(el('p',{class:'empty'},'В проекте пока нет параметров. Добавьте параметр нужной сущности во вкладке «Сущности».'));
+        pickParameter(panel,(owner,ref,path)=>{
+          const child={op:'parameter',neg:false};
+          setParameter(child,owner,ref,path);insert(child);
+        });
       }else if(event.scope==='local'){
         const pick=ref=>insert({op:'self',neg:false,refs:ref?[ref]:[],paths:ref?[event.ownerPath]:[]});
         panel.append(el('small',{},ownerLabel(event.owner,event.ownerPath)),
@@ -307,14 +322,16 @@ function ruleBoard(root,kind,event,draw){
     const shell=el('section',{class:'logic-block '+(node.items?'logic-group logic-'+node.op:'logic-leaf')});
     const head=el('div',{class:'rulehead'});shell.append(head);
     if(parent){
-      const handle=el('span',{draggable:true,class:'logic-handle',title:'Перетащить блок'},'⠿');
-      handle.ondragstart=e=>{
+      shell.classList.add('movable-rule');
+      shell.ondragstart=e=>{
+        if(e.target!==shell)return;
+        e.stopPropagation();
         dragging={node,parent};e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain','rule');
         e.dataTransfer.setDragImage(shell,10,10);shell.classList.add('lifted');board.classList.add('sorting');
       };
-      handle.ondragend=()=>{dragging=null;shell.classList.remove('lifted');board.classList.remove('sorting');
+      shell.ondragend=e=>{if(e.target!==shell)return;
+        dragging=null;shell.draggable=false;shell.classList.remove('lifted');board.classList.remove('sorting');
         board.querySelectorAll('.target').forEach(x=>x.classList.remove('target'));};
-      head.append(handle);
     }
     if(node.items){
       const operator=node.op==='not'?el('strong',{},'НЕ'):
@@ -329,6 +346,12 @@ function ruleBoard(root,kind,event,draw){
       head.append(selector([['all','Все из'],['any','Любой из']],node.op,v=>{node.op=v;draw();}));
     }
     else head.append(el('strong',{},kind==='causes'?'Событие':'Состояние'));
+    if(!node.items){
+      const toggle=btn('НЕ',()=>{node.neg=!node.neg;draw();},'toggle-negation');
+      toggle.setAttribute('aria-pressed',String(node.neg));
+      toggle.title=node.neg?'Снять отрицание':'Добавить отрицание';
+      head.append(toggle);
+    }
     if(parent)head.append(removeButton('Убрать блок',()=>{parent.items.splice(parent.items.indexOf(node),1);draw();}));
     if(node.items){
       node.items.forEach((child,i)=>shell.append(slot(node,i),block(child,node)));
@@ -339,7 +362,13 @@ function ruleBoard(root,kind,event,draw){
       shell.append(el('div',{class:'addrow'},...leafTypes.map(type=>addLeaf(node,type)),...['and','or','not'].map(op=>btn('+ '+words[op],()=>append({op,neg:false,items:[]})))));
     }else if(kind==='causes'){
       shell.append(el('p',{class:'rule-ref ref-event'},fullEvent(node.ref)),eventPicker('Сменить событие',id=>{node.ref=id;draw();}));
-    }else if(node.op==='parameter')shell.append(parameterFields(node));
+    }else if(node.op==='parameter'){
+      shell.append(parameterFields(node),btn('Сменить параметр',()=>{
+        board.querySelector('.slot-chooser')?.remove();
+        const panel=el('div',{class:'slot-chooser'});shell.append(panel);
+        pickParameter(panel,(owner,ref,path)=>{setParameter(node,owner,ref,path);draw();});
+      }));
+    }
     else if(node.op==='self'){
       const options=statesOf(event.owner).map(([id,s])=>[id,s.name]);
       shell.append(el('p',{},ownerLabel(event.owner,event.ownerPath)),selector([['','Любое состояние'],...options],node.refs[0] || '',v=>{
@@ -349,15 +378,18 @@ function ruleBoard(root,kind,event,draw){
     return shell;
   }
   const board=el('div',{class:'logic-board'});
+  board.onpointerdown=e=>{
+    const previous=board.querySelector('[draggable="true"]');
+    if(previous)previous.draggable=false;
+    if(!e.isPrimary || e.button!==0 || e.target.closest('button,input,select,textarea,label,summary,.slot-chooser,.visual-picker'))return;
+    const shell=e.target.closest('.logic-block');
+    if(shell?.classList.contains('movable-rule'))shell.draggable=true;
+  };
   board.append(block(root,null));return board;
 }
 export function editEvent(owner,id=null,scope='local') {
   const key=id || uid();
   const event=id?structuredClone(p.events[id]):{name:'',desc:'',owner,scope,ownerPath:scope==='local'?currentOwnerPath(owner):null,conditions:newGroup(),causes:newGroup(),effects:[]};
-  for(const field of ['conditions','causes']){
-    const normalized=normalizeNegations(event[field]);
-    event[field]=normalized.op==='not'?{...newGroup(),items:[normalized]}:normalized;
-  }
   event.effectPaths??=event.effects.map(()=>null);
   const original=id?outbound(id):[];
   const outgoing=new Set(original);
@@ -377,6 +409,10 @@ export function editEvent(owner,id=null,scope='local') {
     save(next);
   }
   function draw() {
+    for(const field of ['conditions','causes']){
+      const normalized=normalizeNegations(event[field]);
+      event[field]=normalized.op==='not'?{...newGroup(),items:[normalized]}:normalized;
+    }
     const scroll=document.querySelector('dialog').scrollTop;
     const effects=el('div',{class:'effects'});
     for(const [index,state] of event.effects.entries())effects.append(el('div',{class:'effectline'},
