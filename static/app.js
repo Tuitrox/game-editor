@@ -19,6 +19,8 @@ export const uid = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), 
 export let p;
 let version, projectId, busy=false, path=['root'], tab='entities', picked=null;
 let clipboardDrag=null, loadSequence=0;
+const gridStep=5;
+const expandedCards=new Set();
 const here = () => path.at(-1);
 export function descendants(id) {
   const seen = new Set(), queue = [id];
@@ -117,7 +119,7 @@ const poolTitles={entities:'Пул сущностей',states:'Состояни�
 function pointFor(event,offset=[0,0]){
   const rect=$('#board').getBoundingClientRect();
   return [event.clientX-rect.left-offset[0],event.clientY-rect.top-offset[1]]
-    .map(n=>Math.max(0,Math.min(2000000,Math.round(n))));
+    .map(n=>Math.max(0,Math.min(2000000,Math.round(n/gridStep)*gridStep)));
 }
 function place(id,point) {
   if(busy || tab!=='entities' || !Object.hasOwn(p.entities,id))return;
@@ -125,12 +127,82 @@ function place(id,point) {
   const next=structuredClone(p), parent=next.entities[here()];
   if(!parent.children.includes(id))parent.children.push(id);
   (parent.positions??={})[id]=point;
-  save(next,()=>{picked=null;});
+  return save(next,()=>{picked=null;});
 }
-function beginDrag(e,id,offset,kind='entities') {
-  clipboardDrag={id,offset,kind,owner:here(),project:projectId};
+function beginDrag(e,id) {
+  clipboardDrag={id,owner:here(),project:projectId};
   e.dataTransfer.effectAllowed='move';
   e.dataTransfer.setData('text/plain',id);
+}
+function clearPoolDrag(){
+  clipboardDrag=null;
+  $('#board .drop-preview')?.remove();
+}
+function positionCard(card,[x,y]){
+  card.style.left=x+'px';
+  card.style.top=y+'px';
+}
+function enableCardDrag(card,id,kind) {
+  let suppressClick=false;
+  card.addEventListener('click',e=>{
+    if(suppressClick && e.detail!==0){e.preventDefault();e.stopImmediatePropagation();}
+  },true);
+  card.addEventListener('pointerdown',e=>{
+    if(!e.isPrimary || e.button!==0)return;
+    suppressClick=false;
+    if(busy || e.target.closest('button:not(.cardtitle),.child-list'))return;
+    const target=e.target;
+    const start=[e.clientX,e.clientY], rect=card.getBoundingClientRect();
+    const offset=[e.clientX-rect.left,e.clientY-rect.top];
+    const previous=[card.style.left,card.style.top];
+    const controller=new AbortController(), options={signal:controller.signal};
+    let moving=false, frame=0, pointer=e;
+    target.setPointerCapture(e.pointerId);
+    function update(){
+      positionCard(card,pointFor(pointer,offset));
+    }
+    function scrollAtEdge(){
+      if(!card.isConnected){finish(false);return;}
+      const view=$('#content'), bounds=view.getBoundingClientRect();
+      const speed=(value,low,high)=>value<low+24?-10:value>high-24?10:0;
+      view.scrollBy(speed(pointer.clientX,bounds.left,bounds.right),speed(pointer.clientY,bounds.top,bounds.bottom));
+      update();frame=requestAnimationFrame(scrollAtEdge);
+    }
+    function finish(commit){
+      controller.abort();cancelAnimationFrame(frame);
+      if(target.hasPointerCapture(e.pointerId))target.releasePointerCapture(e.pointerId);
+      if(!moving)return;
+      card.classList.remove('moving');
+      const rollback=()=>{[card.style.left,card.style.top]=previous;};
+      if(!commit || !card.isConnected || busy){rollback();return;}
+      const point=pointFor(pointer,offset);
+      positionCard(card,point);
+      let pending;
+      if(kind==='entities')pending=place(id,point);
+      else{
+        const next=structuredClone(p);
+        setLayerPoint(next,here(),kind,id,point);pending=save(next);
+      }
+      Promise.resolve(pending).then(()=>{if(card.isConnected)rollback();});
+    }
+    target.addEventListener('pointermove',event=>{
+      if(event.pointerId!==e.pointerId)return;
+      pointer=event;
+      if(!moving){
+        if(Math.hypot(event.clientX-start[0],event.clientY-start[1])<4)return;
+        moving=true;suppressClick=true;card.classList.add('moving');
+        frame=requestAnimationFrame(scrollAtEdge);
+      }
+      update();
+    },options);
+    target.addEventListener('pointerup',event=>{
+      if(event.pointerId===e.pointerId){pointer=event;finish(true);}
+    },options);
+    target.addEventListener('lostpointercapture',event=>{if(event.pointerId===e.pointerId)finish(false);},options);
+    target.addEventListener('pointercancel',event=>{if(event.pointerId===e.pointerId)finish(false);},options);
+    window.addEventListener('blur',()=>finish(false),options);
+    window.addEventListener('keydown',event=>{if(event.key==='Escape')finish(false);},options);
+  });
 }
 function choose(id) {
   if(descendants(id).has(here()))return notice('Такое вложение создаёт цикл.');
@@ -147,7 +219,7 @@ function renderPool() {
     b.prepend(el('span',{class:'symbol'},tab==='entities'?'◇':tab==='states'?'◉':'↯'));
     if(tab==='entities') {
       b.classList.toggle('picked',picked===id);
-      b.draggable=true;b.ondragstart=e=>beginDrag(e,id,[0,0]);b.ondragend=()=>clipboardDrag=null;
+      b.draggable=true;b.ondragstart=e=>beginDrag(e,id);b.ondragend=clearPoolDrag;
       const jump=btn('↗',()=>go(id),'jump');jump.title='Открыть '+obj.name;
       rows.push(el('div',{class:'poolrow'},b,jump));
     } else {b.title=p.entities[obj.owner].name;rows.push(b);}
@@ -243,9 +315,23 @@ function canvasCard(id,owners,point) {
     card.append(el('div',{class:'cardtools'},title,unlink),el('p',{},entity.desc),
       el('div',{class:'meta'},'Вложено '+entity.children.length+' · Состояний '+count(p.states,id)+' · Событий '+count(p.events,id)));
     card.onclick=e=>{if(!e.target.closest('button'))enter();};
-    card.draggable=true;
-    card.ondragstart=e=>{const rect=card.getBoundingClientRect();beginDrag(e,id,[e.clientX-rect.left,e.clientY-rect.top]);card.classList.add('moving');};
-    card.ondragend=()=>{card.classList.remove('moving');clipboardDrag=null;};
+    if(entity.children.length){
+      const key=here()+'/'+id;
+      const list=el('ul',{class:'child-list'},...entity.children.map(child=>
+        el('li',{},btn(p.entities[child].name,()=>go(child,[...path,id,child]),'link'))));
+      const toggle=btn('',()=>{
+        if(expandedCards.has(key))expandedCards.delete(key);else expandedCards.add(key);
+        showChildren();
+      },'children-toggle');
+      function showChildren(){
+        const open=expandedCards.has(key);
+        toggle.setAttribute('aria-expanded',String(open));
+        toggle.textContent=(open?'▾ Скрыть':'▸ Вложения')+' · '+entity.children.length;
+        list.hidden=!open;
+      }
+      showChildren();card.append(toggle,list);
+    }
+    enableCardDrag(card,id,'entities');
   } else {
     card.append(title);
     const byOwner=new Map(owners.map(key=>[key,[]]));
@@ -257,13 +343,12 @@ function canvasCard(id,owners,point) {
   return card;
 }
 function objectCard(id,obj,point){
-  const card=el('article',{class:'spacecard owncard '+tab,draggable:true},
+  const card=el('article',{class:'spacecard owncard '+tab},
     el('small',{},tab==='states'?'Состояние':'Событие'),
     btn(obj.name,()=>openObject(id),'cardtitle'),obj.desc?el('p',{},obj.desc):null);
   card.style.left=point[0]+'px';card.style.top=point[1]+'px';
   card.onclick=e=>{if(!e.target.closest('button'))openObject(id);};
-  card.ondragstart=e=>{const r=card.getBoundingClientRect();beginDrag(e,id,[e.clientX-r.left,e.clientY-r.top],tab);};
-  card.ondragend=()=>clipboardDrag=null;
+  enableCardDrag(card,id,tab);
   return card;
 }
 function renderBoard() {
@@ -272,7 +357,7 @@ function renderBoard() {
   const availableWidth=$('#content').clientWidth;
   const columns=Math.max(1,Math.floor((availableWidth-24)/254));
   const cards=ids.map((id,i)=>{
-    const point=parent.positions?.[id] || [24+i%columns*254,24+Math.floor(i/columns)*240];
+    const point=parent.positions?.[id] || [25+i%columns*255,25+Math.floor(i/columns)*240];
     return {point,card:canvasCard(id,groups.get(id),point)};
   });
   if(tab!=='entities'){
@@ -284,7 +369,7 @@ function renderBoard() {
       let point=positions[id];
       if(!point){
         do {
-          point=[24+slot%columns*254,24+Math.floor(slot/columns)*180];slot++;
+          point=[25+slot%columns*255,25+Math.floor(slot/columns)*180];slot++;
         }while(occupied.some(([x,y])=>Math.abs(x-point[0])<235 && Math.abs(y-point[1])<165));
         occupied.push(point);
       }
@@ -329,6 +414,7 @@ function newProject(){
 }
 async function route(){
   const ticket=++loadSequence, id=location.hash.match(/^#project\/([1-9]\d*)$/)?.[1];
+  expandedCards.clear();
   if($('dialog').open)$('dialog').close();
   document.body.classList.remove('openpool');
   $('#studio').hidden=true;$('#poolToggle').hidden=true;$('#library').hidden=Boolean(id);
@@ -353,17 +439,22 @@ $('#poolToggle').onclick=()=>document.body.classList.toggle('openpool');
 $('#createPool').onclick=()=>addObject();
 $('#search').oninput=renderPool;$('#edit').onclick=()=>openBasic('entities',here());
 const board=$('#board');
-board.ondragover=e=>{if(clipboardDrag?.kind===tab){e.preventDefault();e.dataTransfer.dropEffect='move';}};
+board.ondragover=e=>{
+  if(!clipboardDrag || tab!=='entities')return;
+  e.preventDefault();e.dataTransfer.dropEffect='move';
+  let preview=board.querySelector('.drop-preview');
+  if(!preview){
+    const entity=p.entities[clipboardDrag.id];
+    preview=el('div',{class:'spacecard drop-preview'},el('strong',{},entity.name),el('p',{},entity.desc));
+    board.append(preview);
+  }
+  positionCard(preview,pointFor(e));
+};
+board.ondragleave=e=>{if(!board.contains(e.relatedTarget))board.querySelector('.drop-preview')?.remove();};
 board.ondrop=e=>{
   e.preventDefault();
-  const drag=clipboardDrag;clipboardDrag=null;
-  if(!drag || busy || drag.owner!==here() || drag.project!==projectId || drag.kind!==tab)return;
-  const point=pointFor(e,drag.offset);
-  if(tab==='entities')place(drag.id,point);
-  else {
-    const next=structuredClone(p);
-    setLayerPoint(next,here(),tab,drag.id,point);save(next);
-  }
+  const drag=clipboardDrag;clearPoolDrag();
+  if(drag && !busy && drag.owner===here() && drag.project===projectId && tab==='entities')place(drag.id,pointFor(e));
 };
 board.onclick=e=>{if(picked && !busy)place(picked,pointFor(e));};
 board.ondblclick=e=>{if(e.target===board && tab!=='entities')addObject(here(),pointFor(e));};
