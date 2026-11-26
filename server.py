@@ -12,6 +12,7 @@ BASE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("DATA_DIR", BASE / "data"))
 DB = DATA / "editor.sqlite3"
 ASSETS = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
+          "/parameters.js": ("parameters.js", "text/javascript"),
           "/graph.js": ("graph.js", "text/javascript"), "/wires.js": ("wires.js", "text/javascript"), "/routes.js": ("routes.js", "text/javascript"), "/canvas.css": ("canvas.css", "text/css"), "/editor.js": ("editor.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
 
 
@@ -49,9 +50,12 @@ def validate(p):
             require(param_id.isascii() and param_id.replace("-", "").isalnum() and
                     isinstance(param, dict), "Неверный параметр")
             require(isinstance(param.get("name"), str) and param["name"].strip(), "Нужно название параметра")
-            value = param.get("value")
-            require(type(value) in (int, float) and -sys.float_info.max <= value <= sys.float_info.max,
-                    "Начальное значение параметра должно быть конечным числом")
+            if "type" in param:
+                require(param["type"] in ("number", "string", "boolean"), "Неизвестный тип параметра")
+            else:  # Numeric definitions from older projects.
+                value = param.get("value")
+                require(type(value) in (int, float) and -sys.float_info.max <= value <= sys.float_info.max,
+                        "Нужен тип параметра")
         children = entities[key]["children"]
         require(isinstance(children, list) and len(set(children)) == len(children)
                 and "root" not in children, "Недопустимое вложение")
@@ -99,6 +103,8 @@ def validate(p):
         require(all(k in entities for k in chain) and
                 all(b in entities[a]["children"] for a, b in zip(chain, chain[1:])), "Неизвестный холст")
         nodes = {"events:" + k for k in events} | {"states:" + k for k in states}
+        nodes.update(f"parameters:{owner}:{k}" for owner, entity in entities.items()
+                     for k in entity.get("parameters", {}))
         coordinates(layout["positions"], nodes)
         coordinates(layout["sizes"], nodes)
         for w, h in layout["sizes"].values():
@@ -142,6 +148,22 @@ def validate(p):
                 rule(child, kind, event)
         elif kind == "causes" and op == "event":
             require(node["ref"] in events, "Выберите событие")
+        elif kind == "conditions" and op == "parameter":
+            owner, ref = node["owner"], node["ref"]
+            require(owner in entities and ref in entities[owner].get("parameters", {}), "Неизвестный параметр")
+            check_path(node.get("path"), owner)
+            if event.get("scope") == "local":
+                require(owner == event["owner"] and node.get("path") == event.get("ownerPath"),
+                        "Выберите параметр источника события")
+            param_type = entities[owner]["parameters"][ref].get("type", "number")
+            value, compare = node["value"], node["compare"]
+            if param_type == "number":
+                require(compare in ("lt", "le", "eq", "ge", "gt") and
+                        type(value) in (int, float) and 0 <= value <= 100, "Укажите процент от 0 до 100")
+            elif param_type == "boolean":
+                require(compare == "eq" and type(value) is bool, "Выберите Да или Нет")
+            else:
+                require(compare == "eq" and isinstance(value, str), "Введите строку для сравнения")
         elif kind == "conditions" and op == "self":
             refs = node["refs"]
             require(event.get("scope") == "local" and isinstance(refs, list) and len(refs) <= 1

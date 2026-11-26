@@ -3,6 +3,7 @@ import {editEvent, leaves, describeRule, removeCause, triggers, ruleReference} f
 import {projectGraph, layoutGraph, upstream} from './graph.js';
 import {wireLayer} from './wires.js';
 import {entityRoutes, pathLabel} from './routes.js';
+import {parameterTypes, parameterTest} from './parameters.js';
 const $ = s => document.querySelector(s);
 export function el(tag, props = {}, ...kids) {
   const node = document.createElement(tag);
@@ -121,12 +122,16 @@ export async function save(next, after, {undo=false}={}) {
   if (busy) return;
   // Hand edits belong to this topology. Rebuild after nodes or logical links change.
   if (!undo && next.graphLayouts && topology(p)!==topology(next)) {
+    const usedParameters=new Set(Object.values(next.events).flatMap(e=>leaves(e.conditions)
+      .filter(n=>n.op==='parameter').map(n=>'parameters:'+n.owner+':'+n.ref)));
     for(const [route,layout] of entries(next.graphLayouts)){
       const chain=route.split('/');
       const valid=chain.every((id,i)=>Object.hasOwn(next.entities,id) &&
         (i===0 || next.entities[chain[i-1]].children.includes(id)));
       const sizes=Object.fromEntries(entries(layout.sizes).filter(([key])=>{
-        const [kind,id]=key.split(':');return Object.hasOwn(next[kind],id);
+        const [kind,id]=key.split(':');
+        if(kind==='parameters')return usedParameters.has(key);
+        return Object.hasOwn(next[kind],id);
       }));
       if(valid && Object.keys(sizes).length)next.graphLayouts[route]={sizes,positions:{},bends:{}};
       else delete next.graphLayouts[route];
@@ -215,7 +220,8 @@ function entityDraftForm(){
 export function deleteObj(type,id) {
   const next=structuredClone(p), obj=next[type][id];
   if(type==='entities' && (count(p.events,id)||count(p.states,id))) return notice('Сначала удалите собственные состояния и события этой сущности.');
-  if(type==='states' && entries(p.events).some(([,e])=>e.effects.includes(id)||leaves(e.conditions).some(n=>n.refs.includes(id)))) return notice('Состояние используется в правилах. Сначала измените связанные события.');
+  if(type==='entities' && Object.values(p.events).some(e=>leaves(e.conditions).some(n=>n.op==='parameter' && n.owner===id)))return notice('Параметры сущности используются в правилах.');
+  if(type==='states' && entries(p.events).some(([,e])=>e.effects.includes(id)||leaves(e.conditions).some(n=>n.refs?.includes(id)))) return notice('Состояние используется в правилах. Сначала измените связанные события.');
   if(!confirm('Удалить «'+obj.name+'»'+(type==='entities'?' из пула и всех вложений':'')+'?')) return;
   delete next[type][id];
   if(type!=='entities'){
@@ -425,8 +431,10 @@ function showRelations() {
       const source=p.events[n.ref];
       add([source.owner,source.ownerPath],emitter,id,source.name+' · в причинах «'+event.name+'»');
     }
-    for(const n of leaves(event.conditions))n.refs.forEach((s,i)=>
-      add([p.states[s].owner,n.paths?.[i]],emitter,id,p.states[s].name+' · условие для «'+event.name+'»'));
+    for(const n of leaves(event.conditions)){
+      if(n.op==='parameter')add([n.owner,n.path],emitter,id,parameterTest(p,n)+' · условие для «'+event.name+'»');
+      else n.refs.forEach((s,i)=>add([p.states[s].owner,n.paths?.[i]],emitter,id,p.states[s].name+' · условие для «'+event.name+'»'));
+    }
     event.effects.forEach((s,i)=>add(emitter,[p.states[s].owner,event.effectPaths?.[i]],id,event.name+' → '+p.states[s].name));
   }
   modal('Связи систем',...(edges.size?[...edges.values()].map(edge=>
@@ -524,26 +532,31 @@ function entityParameters(owner){
       if(id===editing){section.append(form(id,param));continue;}
       const row=btn('',()=>show(id),'parameter-row');
       row.title='Изменить параметр «'+param.name+'»';
-      row.append(el('span',{},param.name),el('strong',{},String(param.value)));
+      row.append(el('span',{},param.name),el('strong',{},parameterTypes[param.type || 'number']));
       section.append(row);
     }
-    if(editing==='')section.append(form('',{name:'',value:''}));
+    if(editing==='')section.append(form('',{name:'',type:'number'}));
     if(editing!==null)section.querySelector('input').focus();
   }
   function form(id,param){
     const name=el('input',{name:'name',value:param.name,required:true,placeholder:'Например, HP'});
-    const value=el('input',{name:'value',type:'number',step:'any',value:param.value,required:true});
+    const type=el('select',{name:'type'},...entries(parameterTypes).map(([k,v])=>option(k,v)));
+    type.value=param.type || 'number';
+    const usedBy=id && Object.values(p.events).find(e=>leaves(e.conditions).some(n=>n.op==='parameter' && n.owner===owner && n.ref===id));
+    const inUse=()=>notice('Параметр используется в условиях события «'+usedBy.name+'». Сначала измените условие.');
     const cancel=()=>{show();section.querySelector('.parameter-heading button').focus();};
     const editor=el('form',{class:'parameter-form',onsubmit:e=>{
       e.preventDefault();
       if(busy)return;
       if(!name.value.trim()){name.focus();return;}
       const next=structuredClone(p);
-      (next.entities[owner].parameters??={})[id || uid()]={name:name.value.trim(),value:value.valueAsNumber};
+      if(usedBy && type.value!==(param.type || 'number'))return inUse();
+      (next.entities[owner].parameters??={})[id || uid()]={name:name.value.trim(),type:type.value};
       save(next);
-    }},label('Название',name),label('Начальное значение',value));
+    }},label('Название',name),label('Тип',type));
     const actions=el('div',{class:'addrow'},el('button',{type:'submit',class:'primary'},'Сохранить'),btn('Отмена',cancel));
     if(id)actions.append(btn('Удалить',()=>{
+      if(usedBy)return inUse();
       const next=structuredClone(p),params=next.entities[owner].parameters;
       delete params[id];
       if(!Object.keys(params).length)delete next.entities[owner].parameters;
@@ -634,7 +647,7 @@ function stateReferences(){
   for(const [key,e] of entries(p.events)){
     e.effects.forEach((id,i)=>record('sets',id,key,e.effectPaths?.[i]));
     for(const leaf of leaves(e.conditions)){
-      leaf.refs.forEach((id,i)=>record('checks',id,key,leaf.paths?.[i]));
+      leaf.refs?.forEach((id,i)=>record('checks',id,key,leaf.paths?.[i]));
     }
   }
   return index;
@@ -760,14 +773,14 @@ function renderEventBoard(board){
     }
   }
   for(const n of graph.nodes){
-    const event=n.kind==='events', type=event?'Событие':'Состояние';
+    const event=n.kind==='events', parameter=n.kind==='parameters', type=event?'Событие':parameter?'Параметр':'Состояние';
     const owner=n.obj.scope==='global'?'Весь проект':p.entities[n.obj.owner].name;
     const card=el('article',{class:'spacecard owncard graph-card '+n.kind+(n.external?' external':'')});
     const select=()=>highlight(selectedNode===n.key?null:n.key);
     const title=btn(n.obj.name,select,'graph-title');
     const route=n.obj.ownerPath || (n.external?pathTo(n.obj.owner):pathTo(n.obj.owner,path));
-    const details=btn('↗',()=>event?eventDetail(n.id):openStateCanvas(n.id,route),'graph-open');
-    details.title=event?'Открыть правило':'Открыть состояние';
+    const details=btn('↗',()=>event?eventDetail(n.id):parameter?go(n.obj.owner,route,'entities'):openStateCanvas(n.id,route),'graph-open');
+    details.title=event?'Открыть правило':parameter?'Открыть сущность':'Открыть состояние';
     details.setAttribute('aria-label',details.title+' «'+n.obj.name+'»');
     card.dataset.key=n.key;
     card.append(el('small',{},(n.external?'Ярлык · ':'')+type),title,el('span',{class:'graph-owner',title:pathLabel(p,route)},owner),details);

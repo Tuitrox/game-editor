@@ -1,6 +1,7 @@
 import {p,el,btn,option,label,entries,uid,modal,fields,footer,save,deleteObj,outbound,eventDetail,stateDetail,notice,currentOwnerPath} from './app.js';
 
 import {pathLabel} from './routes.js';
+import {parameterTypes, parameterTest, comparisons} from './parameters.js';
 
 export const newGroup = ()=>({op:'and',neg:false,items:[]});
 export const leaves = n => n.items ? n.items.flatMap(leaves) : [n];
@@ -36,12 +37,12 @@ function eventPicker(caption,onPick,allowed=()=>true,open=false){
     apply:(_route,id)=>onPick(id)});
 }
 function statesOf(owner){return entries(p.states).filter(([,s])=>s.owner===owner);}
-function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=false,eventFilter=null,open=false}){
+function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=false,parameterMode=false,eventFilter=null,open=false}){
   const wrap=el('div',{class:'visual-picker'});
   const launch=btn(caption,()=>{
     if(wrap.querySelector('.tree-panel'))return;
     const selected=new Map(initial.filter(Boolean).map(route=>[route.join('/'),route]));
-    const search=el('input',{type:'search',placeholder:eventFilter?'Название события или сущности…':stateMode?'Название сущности или состояния…':'Найти сущность по названию…',ariaLabel:'Подсветить совпадения'});
+    const search=el('input',{type:'search',placeholder:eventFilter?'Название события или сущности…':parameterMode?'Название сущности или параметра…':stateMode?'Название сущности или состояния…':'Найти сущность по названию…',ariaLabel:'Подсветить совпадения'});
     const folders=new Map();
     const eventsByOwner=new Map();
     if(eventFilter)for(const [id,event] of entries(p.events)){
@@ -67,7 +68,7 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
         row=btn('',()=>apply(route),'tree-node');row.append(name);
       }else row=el('span',{class:'tree-node'},name);
       const contents=el('div',{class:'tree-contents'}),trail=[...ancestors,addr];
-      if(stateMode)for(const [id,s] of statesOf(key)){
+      if(stateMode || parameterMode)for(const [id,s] of parameterMode?entries(entity.parameters || {}):statesOf(key)){
         const pick=btn('',()=>apply(route,id),'tree-state');pick.append('→ ',record(s.name,trail));contents.append(pick);
       }
       for(const [id,event] of eventsByOwner.get(key) || []){
@@ -198,6 +199,7 @@ export function describeRule(n,event) {
   if(n.neg)return ruleGroup('not',[describeRule({...n,neg:false},event)]);
   if(n.items)return ruleGroup(n.op,n.items.map(child=>describeRule(child,event)));
   if(n.op==='event')return ruleReference('event',n.ref);
+  if(n.op==='parameter')return el('span',{class:'rule-ref ref-parameter'},ownerLabel(n.owner,n.path)+' → '+parameterTest(p,n));
   if(n.op==='self')return n.refs.length?ruleReference('state',n.refs[0],event.ownerPath):
     el('span',{class:'rule-ref ref-state'},p.entities[event.owner].name+' → Любое состояние');
   return ruleGroup(n.op,conditionMembers(n).map((m,i)=>ruleReference('state',n.refs[i],m.route,
@@ -212,6 +214,21 @@ function normalizeNegations(node){
   if(node.items)clean.items=node.items.map(normalizeNegations);
   return node.neg?{op:'not',neg:false,items:[clean]}:clean;
 }
+function parameterFields(node){
+  const param=p.entities[node.owner].parameters[node.ref], type=param.type || 'number';
+  const fields=el('div',{class:'parameter-check'});
+  if(type==='number'){
+    const compare=selector(entries(comparisons),node.compare,v=>{node.compare=v;});
+    compare.ariaLabel='Сравнение';
+    fields.append(compare,el('input',{type:'number',min:0,max:100,step:'any',required:true,value:node.value,
+      ariaLabel:'Процент от максимума',oninput:e=>{node.value=e.target.value===''?null:e.target.valueAsNumber;}}),'%');
+  }else if(type==='boolean'){
+    const choice=selector([['true','Да'],['false','Нет']],String(node.value),v=>{node.value=v==='true';});
+    choice.ariaLabel='Проверяемое значение';fields.append(choice);
+  }else fields.append(el('span',{},'Равно'),el('input',{type:'text',value:node.value,ariaLabel:'Точный текст',
+    oninput:e=>{node.value=e.target.value;}}));
+  return el('div',{},el('p',{class:'rule-ref ref-parameter'},ownerLabel(node.owner,node.path)+' → '+param.name),fields);
+}
 function ruleBoard(root,kind,event,draw){
   let dragging=null;
   function contains(node,target){return node===target || node.items?.some(child=>contains(child,target));}
@@ -219,6 +236,10 @@ function ruleBoard(root,kind,event,draw){
     const caption=kind==='causes'?'Выбрать событие-причину':'Выбрать условие';
     function insert(child){
       parent.items.push(child);draw();
+    }
+    function insertParameter(owner,ref,path){
+      const type=p.entities[owner].parameters[ref].type || 'number';
+      insert({op:'parameter',neg:false,owner,ref,path,compare:'eq',value:type==='number'?null:type==='boolean'?true:''});
     }
     return el('button',{type:'button',class:'add-leaf',title:caption,ariaLabel:caption,onclick:e=>{
       board.querySelector('.slot-chooser')?.remove();
@@ -231,9 +252,15 @@ function ruleBoard(root,kind,event,draw){
         panel.append(el('small',{},ownerLabel(event.owner,event.ownerPath)),
           btn('Любое состояние',()=>pick(null),'choice'),
           ...statesOf(event.owner).map(([id,s])=>btn(s.name,()=>pick(id),'choice')));
+        const params=entries(p.entities[event.owner].parameters || {});
+        if(params.length)panel.append(el('strong',{},'Параметры'),...params.map(([id,param])=>
+          btn(param.name,()=>insertParameter(event.owner,id,event.ownerPath),'choice')));
       }else{
         const mode=selector([['all','Все из'],['any','Любой из']],'all',()=>{});
-        panel.append(mode,visualTree(caption,{open:true,eligible:r=>statesOf(r.at(-1)).length>0,
+        const pickParameter=btn('Выбрать параметр',()=>panel.replaceChildren(visualTree('Выбрать параметр',{
+          multiple:false,parameterMode:true,eligible:()=>false,open:true,
+          apply:(route,id)=>insertParameter(route.at(-1),id,route)})));
+        panel.append(pickParameter,mode,visualTree(caption,{open:true,eligible:r=>statesOf(r.at(-1)).length>0,
           apply:routes=>{
             if(!routes.length)return notice('Выберите сущность для проверки.');
             insert({op:mode.value,neg:false,refs:routes.map(()=>''),paths:routes});
@@ -279,6 +306,7 @@ function ruleBoard(root,kind,event,draw){
       if(node.items.length<2 && node.op!=='not')shell.classList.add('single-rule');
       shell.prepend(el('div',{class:'operator-rail'},operator));
     }
+    else if(node.op==='parameter')head.append(el('strong',{},'Параметр · '+parameterTypes[p.entities[node.owner].parameters[node.ref].type || 'number']));
     else if(kind==='conditions' && node.op!=='self'){
       shell.classList.add('tone-'+node.op);
       head.append(selector([['all','Все из'],['any','Любой из']],node.op,v=>{node.op=v;draw();}));
@@ -293,7 +321,8 @@ function ruleBoard(root,kind,event,draw){
       shell.append(el('div',{class:'addrow'},addLeaf(node),...['and','or','not'].map(op=>btn('+ '+words[op],()=>append({op,neg:false,items:[]})))));
     }else if(kind==='causes'){
       shell.append(el('p',{class:'rule-ref ref-event'},fullEvent(node.ref)),eventPicker('Сменить событие',id=>{node.ref=id;draw();}));
-    }else if(node.op==='self'){
+    }else if(node.op==='parameter')shell.append(parameterFields(node));
+    else if(node.op==='self'){
       const options=statesOf(event.owner).map(([id,s])=>[id,s.name]);
       shell.append(el('p',{},ownerLabel(event.owner,event.ownerPath)),selector([['','Любое состояние'],...options],node.refs[0] || '',v=>{
         node.refs=v?[v]:[];node.paths=v?[event.ownerPath]:[];
@@ -317,7 +346,7 @@ export function editEvent(owner,id=null,scope='local') {
   // A self-reference is edited in the causes tree, just like any other inbound rule.
   const nextTargets=entries(p.events).filter(([k])=>k!==key);
   function commit() {
-    if(leaves(event.conditions).some(n=>n.op!=='self' && (!n.refs.length || n.refs.some(key=>!key))))
+    if(leaves(event.conditions).some(n=>(n.op==='all' || n.op==='any') && (!n.refs.length || n.refs.some(key=>!key))))
       return notice('Заполните группу и выберите состояние.');
     const next=structuredClone(p);
     const draft=structuredClone(event);

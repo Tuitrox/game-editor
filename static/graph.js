@@ -1,3 +1,5 @@
+import {parameterTest} from './parameters.js';
+
 // Event and state IDs belong to separate pools. References always use the same
 // typed key, even when several rules point at the same external object.
 export function projectGraph(project, path, inBranch) {
@@ -39,8 +41,20 @@ export function projectGraph(project, path, inBranch) {
     const event = 'events:' + id;
     walk(e.causes, (leaf, label, negated) =>
       link('events:'+leaf.ref, event, 'cause', 'Причина · '+label, undefined, negated));
-    walk(e.conditions, (leaf, label, negated) => leaf.refs.forEach((ref,i) =>
-      link('states:'+ref, event, 'condition', 'Условие · '+label, leaf.paths?.[i], negated)));
+    walk(e.conditions, (leaf, label, negated) => {
+      if (leaf.op === 'parameter') {
+        const key = 'parameters:' + leaf.owner + ':' + leaf.ref;
+        const obj = {...project.entities[leaf.owner].parameters[leaf.ref], owner:leaf.owner};
+        const local = root || inBranch({owner:leaf.owner, ownerPath:leaf.path}, path);
+        if (!nodes.has(key)) nodes.set(key,{key,id:leaf.ref,kind:'parameters',obj,external:true});
+        if (local) {
+          nodes.get(key).external = false;
+          locals.add(key);
+        }
+        link(key, event, 'condition', [label,parameterTest(project,leaf)].filter(Boolean).join(' › '), leaf.path, negated);
+      } else leaf.refs.forEach((ref,i) =>
+        link('states:'+ref, event, 'condition', 'Условие · '+label, leaf.paths?.[i], negated));
+    });
     e.effects.forEach((ref,i) => link(event, 'states:'+ref, 'effect', 'Устанавливает состояние', e.effectPaths?.[i]));
   }
   // Keep existing hand-edited bends. Only a second polarity needs a new layout key.
