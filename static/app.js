@@ -636,14 +636,15 @@ function stateOverview(board){
     const entity=p.entities[owner],route=routes[0],key=route.join('/');
     const group=el('section',{class:'state-group'});group.dataset.route=key;
     const add=btn('＋',()=>addObject(owner,group),'state-add');
-    add.title='Добавить состояние в «'+entity.name+'»';add.setAttribute('aria-label',add.title);
+    add.title=owner==='root'?'Добавить общее состояние':'Добавить состояние в «'+entity.name+'»';add.setAttribute('aria-label',add.title);
     const states=owners.get(owner) || [];
+    if(owner==='root' && !states.length)group.classList.add('empty-project-states');
     const toggle=btn('',()=>setOpen(body.hidden),'state-owner-toggle');
     const arrow=el('span',{ariaHidden:'true'}),count=el('span',{class:'owner-count'},String(states.length));
     count.title='Количество состояний';
-    toggle.append(arrow,entity.name,count);
+    toggle.append(arrow,owner==='root'?'Общие состояния':entity.name,count);
     const label=el('div',{},el('h3',{},toggle));
-    if(routes.length>1)label.append(el('small',{},routes.map(r=>pathLabel(p,r.slice(path.length-1,-1))).join(' · ')));
+    if(routes.length>1)label.append(el('small',{},routes.map(r=>pathLabel(p,r.slice(path.length-1,-1).filter(k=>k!=='root'))).filter(Boolean).join(' · ')));
     else if(route.length>path.length+1)label.append(el('small',{},pathLabel(p,route.slice(path.length,-1))));
     const body=el('div',{class:'state-group-body'});
     const head=el('div',{class:'state-group-head'},label,add);
@@ -670,7 +671,7 @@ function stateOverview(board){
       };
       const summary=el('summary',{},el('strong',{},state.name));
       if(!links.sets.length && !links.checks.length)summary.append(el('small',{},'Без связей'));
-      const open=routes.map(r=>btn(routes.length===1?'Открыть состояние ↗':pathLabel(p,r)+' ↗',
+      const open=routes.map(r=>btn(routes.length===1?'Открыть состояние ↗':pathLabel(p,r.filter(k=>k!=='root'))+' ↗',
         ()=>openStateCanvas(id,r),'link'));
       details.append(summary,el('div',{class:'state-expanded'},state.desc?el('p',{},state.desc):null,stateRules(links),open));
       return details;
@@ -724,6 +725,25 @@ function renderEventBoard(board){
     details.setAttribute('aria-label',details.title+' «'+n.obj.name+'»');
     card.dataset.key=n.key;
     card.append(el('small',{},(n.external?'Ярлык · ':'')+type),title,el('span',{class:'graph-owner',title:pathLabel(p,route)},owner),details);
+    if(event && n.external){
+      const jump=btn(n.obj.scope==='global'?'К глобальному событию':'К сущности ↗',()=>{
+        const stored=n.obj.ownerPath || [n.obj.owner],anchor=stored[0];
+        // A legacy rule or a partial path may occur under several parents.
+        // Follow the nearest shared ancestor when completing its placement.
+        let prefix=pathTo(anchor);
+        for(let i=path.length;i>0;i--){
+          if(descendants(path[i-1]).has(anchor)){prefix=pathTo(anchor,path.slice(0,i));break;}
+        }
+        const fullRoute=[...prefix,...stored.slice(1)];
+        go(n.obj.owner,fullRoute,'events');
+        const target=board.querySelector('[data-key="'+CSS.escape(n.key)+'"] .graph-title');
+        if(target){
+          target.click();target.focus({preventScroll:true});
+          target.closest('.graph-card').scrollIntoView({block:'center',inline:'center'});
+        }
+      },'graph-source');
+      jump.title='Показать «'+n.obj.name+'» в разделе «'+owner+'»';card.append(jump);
+    }
     card.onclick=e=>{if(!e.target.closest('button,.resize-grip'))select();};
     prepareCard(card,n.key);board.append(card);cards.set(n.key,card);
   }
@@ -782,7 +802,7 @@ function scopeTree(){
       toggle.setAttribute('aria-expanded',String(open));
       toggle.setAttribute('aria-label',(open?'Свернуть ':'Раскрыть ')+entity.name);row.append(toggle);
     }else row.append(el('span',{class:'scope-space'}));
-    const select=btn(entity.name,()=>{
+    const select=btn(tab==='states' && id==='root'?'Весь проект':entity.name,()=>{
       if(narrowScope.matches)scopeOpen=false;
       if(key!==active || stateCanvas)go(id,route);
       else renderScope();
@@ -818,10 +838,11 @@ function render() {
   const header=$('.context>div');
   header.querySelector('.inline-fields')?.remove();
   const type=stateCanvas?'states':'entities', key=stateCanvas || id;
-  $('#title').replaceChildren(fieldButton(current.name,header,type,key,'name','header-field'));
+  const projectStates=tab==='states' && id==='root' && !stateCanvas;
+  $('#title').replaceChildren(projectStates?'Состояния':fieldButton(current.name,header,type,key,'name','header-field'));
   $('#description').replaceChildren(fieldButton(current.desc || 'Добавить описание',header,type,key,'desc','header-field'));
-  $('#topproject').textContent=p.entities.root.name;
-  $('#crumbs').replaceChildren(...path.flatMap((key,i)=>[...(i?[' / ']:[]),btn(p.entities[key].name,()=>go(key,path.slice(0,i+1)),'crumb')]));
+  $('#topproject').textContent=tab==='states'?'':p.entities.root.name;
+  $('#crumbs').replaceChildren(...path.flatMap((key,i)=>[...(i?[' / ']:[]),btn(tab==='states' && key==='root'?'Проект':p.entities[key].name,()=>go(key,path.slice(0,i+1)),'crumb')]));
   if(stateCanvas)$('#crumbs').append(' / ',current.name);
   while(backStack.length && !validView(backStack.at(-1)))backStack.pop();
   $('#up').disabled=!backStack.length;

@@ -188,6 +188,18 @@ button.rule-ref:hover{text-decoration:underline}
 .entity-row .tree-section:hover,.entity-row .tree-action:hover{background:#e3ebe2}
 .tree-attach{font-size:12px}.entity-row.drop-target,#board.entity-map.drop-target{outline:2px dashed #487553;outline-offset:-2px}
 .tree-empty{margin:0;padding:20px;color:#53695b}
+.workspace{container-type:inline-size}
+.workspace .toolbar{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center}
+.toolbar #crumbs{min-width:0;grid-column:1}
+.toolbar #tabs{grid-column:2;justify-self:center;margin:0}
+.toolbar #scopeToggle{grid-column:3;justify-self:end}
+@container (max-width:650px){
+  .workspace .toolbar{grid-template-columns:minmax(0,1fr) auto}
+  .toolbar #scopeToggle{grid-column:2;grid-row:1}
+  .toolbar #tabs{grid-column:1 / -1;grid-row:2}
+}
+.graph-source{font-size:11px;padding:2px 6px;color:#375a45}
+.logic-board:not(.sorting) .rule-slot.drop-only{height:4px;min-height:0;border:0}
 #board.states-overview{background:#f4f7f7;padding:clamp(12px,2vw,28px);box-sizing:border-box}
 .state-list{max-width:980px;display:grid;gap:12px}
 .state-group{border:1px solid #c9d5d7;border-radius:10px;background:white;min-width:0}
@@ -221,6 +233,7 @@ button.rule-ref:hover{text-decoration:underline}
 @media(max-width:760px){#studio.with-scope{grid-template-columns:minmax(0,1fr)}}
 .state-add{flex:none;font-size:17px;line-height:1;padding:4px 7px}
 .state-empty{margin:0;padding:0 15px 12px}
+.empty-project-states:not(:has(form)),.empty-project-states>.state-group-head,.empty-project-states .state-empty{display:none}
 .state-record{margin:0;border:0;border-top:1px solid #dde5e6;padding:0}
 .state-record>summary,.state-empty-owners>summary{padding:9px 15px;cursor:pointer}
 .state-record>summary{color:#305863;font-size:14px}

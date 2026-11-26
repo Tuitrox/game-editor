@@ -23,8 +23,9 @@ function addCause(target,id) {
   else target.causes={op:'or',neg:false,items:[group,leaf]};
 }
 const words={and:'И',or:'ИЛИ',not:'НЕ',all:'Все из',any:'Любой из'};
-const ownerLabel=(owner,route)=>route?pathLabel(p,route):p.entities[owner].name+' (без привязки к размещению)';
-export const fullState=(id,route)=>ownerLabel(p.states[id].owner,route)+' → '+p.states[id].name;
+const ownerLabel=(owner,route)=>route?pathLabel(p,route):p.entities[owner].name;
+const stateOwnerLabel=(owner,route)=>route?.length?pathLabel(p,route.filter(id=>id!=='root')) || 'Проект':owner==='root'?'Проект':p.entities[owner].name;
+export const fullState=(id,route)=>stateOwnerLabel(p.states[id].owner,route)+' → '+p.states[id].name;
 export const fullEvent=id=>{
   const event=p.events[id];
   return (event.scope==='global'?'Глобальное событие':ownerLabel(event.owner,event.ownerPath))+' / '+event.name;
@@ -124,10 +125,10 @@ function conditionMembers(node){
   const members=node.refs.map((id,i)=>{
     const route=node.paths?.[i], owner=route?.at(-1) ?? p.states[id].owner;
     return {owner,name:p.entities[owner].name,route,state:p.states[id]?.name,
-      parents:route?.slice(0,-1).map(key=>p.entities[key].name) ?? []};
+      parents:route?.slice(0,-1).filter(key=>key!=='root').map(key=>p.entities[key].name) ?? []};
   });
   for(const member of members){
-    if(!member.route){member.place='Без привязки к размещению';continue;}
+    if(!member.route)continue;
     const peers=members.filter(other=>other!==member && other.name===member.name && other.route);
     const parents=member.parents;
     let depth=1;
@@ -187,7 +188,7 @@ function ruleGroup(op,children){
 export function ruleReference(kind,id,route,place){
   const isEvent=kind==='event', obj=isEvent?p.events[id]:p.states[id];
   if(isEvent)route=obj.ownerPath;
-  const owner=place ?? (route?pathLabel(p,route.slice(-2)):p.entities[obj.owner].name);
+  const owner=place ?? (isEvent?ownerLabel(obj.owner,route?.slice(-2)):stateOwnerLabel(obj.owner,route?.slice(-2)));
   const caption=isEvent?(obj.scope==='global'?obj.name:owner+' / '+obj.name):owner+' → '+obj.name;
   const title=isEvent?fullEvent(id):fullState(id,route);
   return el('button',{type:'button',class:'rule-ref ref-'+kind,title,ariaLabel:title,
@@ -214,18 +215,15 @@ function normalizeNegations(node){
 function ruleBoard(root,kind,event,draw){
   let dragging=null;
   function contains(node,target){return node===target || node.items?.some(child=>contains(child,target));}
-  function slot(parent,index){
-    const locked=parent.op==='not' && parent.items.length>0;
+  function addLeaf(parent){
     const caption=kind==='causes'?'Выбрать событие-причину':'Выбрать условие';
-    const compact=parent.items.length>0;
-    const zone=el('div',{class:'rule-slot'+(locked?' drop-only':compact?' compact-slot':'')});
     function insert(child){
-      parent.items.splice(index,0,child);draw();
+      parent.items.push(child);draw();
     }
-    if(!locked)zone.append(el('button',{type:'button',class:'slot-label',title:caption,ariaLabel:caption,onclick:()=>{
+    return el('button',{type:'button',class:'add-leaf',title:caption,ariaLabel:caption,onclick:e=>{
       board.querySelector('.slot-chooser')?.remove();
       const panel=el('div',{class:'slot-chooser'});
-      zone.after(panel);
+      e.currentTarget.parentElement.after(panel);
       if(kind==='causes'){
         panel.append(eventPicker(caption,id=>insert({op:'event',neg:false,ref:id}),()=>true,true));
       }else if(event.scope==='local'){
@@ -241,7 +239,10 @@ function ruleBoard(root,kind,event,draw){
             insert({op:mode.value,neg:false,refs:routes.map(()=>''),paths:routes});
           }}));
       }
-    }},compact?'+':caption));
+    }},kind==='causes'?'+ Событие':'+ Условие');
+  }
+  function slot(parent,index){
+    const zone=el('div',{class:'rule-slot drop-only'});
     function accepts(){
       if(!dragging || contains(dragging.node,parent))return false;
       return parent.op!=='not' || !parent.items.length || dragging.parent===parent;
@@ -289,7 +290,7 @@ function ruleBoard(root,kind,event,draw){
       shell.append(slot(node,node.items.length));
       if(node.op==='not' && node.items.length)return shell;
       const append=child=>{node.items.push(child);draw();};
-      shell.append(el('div',{class:'addrow'},...['and','or','not'].map(op=>btn('+ '+words[op],()=>append({op,neg:false,items:[]})))));
+      shell.append(el('div',{class:'addrow'},addLeaf(node),...['and','or','not'].map(op=>btn('+ '+words[op],()=>append({op,neg:false,items:[]})))));
     }else if(kind==='causes'){
       shell.append(el('p',{class:'rule-ref ref-event'},fullEvent(node.ref)),eventPicker('Сменить событие',id=>{node.ref=id;draw();}));
     }else if(node.op==='self'){
