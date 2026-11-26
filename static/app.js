@@ -117,8 +117,9 @@ export function deleteObj(type,id) {
   if(!confirm('Удалить «'+obj.name+'»'+(type==='entities'?' из пула и всех вложений':'')+'?')) return;
   delete next[type][id];
   if(type!=='entities'){
-    delete next.entities[obj.owner].layers?.[type]?.[id];
-    delete next.entities[obj.owner].layerSizes?.[type]?.[id];
+    for(const entity of Object.values(next.entities)){
+      delete entity.layers?.[type]?.[id];delete entity.layerSizes?.[type]?.[id];
+    }
   }
   if(type==='entities') for(const ent of Object.values(next.entities)) {
     ent.children=ent.children.filter(c=>c!==id);
@@ -186,14 +187,14 @@ function enableCardDrag(card,id,kind) {
     if(!e.isPrimary || e.button!==0)return;
     suppressClick=false;
     const resizing=e.target.closest('.resize-grip');
-    if(busy || (!resizing && e.target.closest('button,input,textarea,form,.child-list')))return;
+    if(busy || (!resizing && e.target.closest('button,input,textarea,form,.child-list,.event-relation')))return;
     const target=e.target;
     const start=[e.clientX,e.clientY], rect=card.getBoundingClientRect();
-    const offset=[e.clientX-rect.left,e.clientY-rect.top];
+    const boardRect=$('#board').getBoundingClientRect();
+    const offset=[e.clientX-boardRect.left-parseFloat(card.style.left),e.clientY-boardRect.top-parseFloat(card.style.top)];
     const previous=[card.style.left,card.style.top,card.style.width,card.style.minHeight];
     const edge=resizing?.dataset.edge || '';
     const origin=[parseFloat(card.style.left),parseFloat(card.style.top)];
-    const boardRect=$('#board').getBoundingClientRect();
     const fixedRight=origin[0]+rect.width, fixedBottom=origin[1]+rect.height;
     const snap=v=>Math.round(v/gridStep)*gridStep;
     let size,position;
@@ -464,21 +465,18 @@ function canvasCard(id,owners,point) {
       }
       showChildren();body.append(toggle,list);
     }
+  } else if(tab==='events'){
+    const branch=[...path,id];
+    body.append(el('div',{class:'meta'},'Событий '+Object.values(p.events).filter(e=>eventInBranch(e,branch)).length),
+      btn('+ Событие',()=>addObject(id,null,body)));
   } else {
-
     const byOwner=new Map(owners.map(key=>[key,[]]));
     const branch=[...path,id];
-    for(const [key,obj] of entries(p[tab])){
-      if(tab==='events' && obj.ownerPath){
-        if(!eventInBranch(obj,branch))continue;
-        if(!byOwner.has(obj.owner))byOwner.set(obj.owner,[]);
-      }
+    for(const [key,obj] of entries(p.states)){
       if(!byOwner.has(obj.owner))continue;
-      if(tab==='states'){
-        const mini=el('div',{class:'mini-state'});
-        cardText(mini,'states',key);mini.append(btn('Открыть холст ↗',()=>openStateCanvas(key,pathTo(obj.owner,branch)),'open-canvas'));
-        byOwner.get(obj.owner).push(mini);
-      }else byOwner.get(obj.owner).push(btn(obj.name,()=>eventDetail(key),'chip'));
+      const mini=el('div',{class:'mini-state'});
+      cardText(mini,'states',key);mini.append(btn('Открыть холст ↗',()=>openStateCanvas(key,pathTo(obj.owner,branch)),'open-canvas'));
+      byOwner.get(obj.owner).push(mini);
     }
     for(const [owner,items] of byOwner)if(items.length)body.append(el('section',{},
       owner===id?null:el('small',{},p.entities[owner].name),el('div',{class:'chips'},items)));
@@ -486,6 +484,36 @@ function canvasCard(id,owners,point) {
   }
   body.append(open);card.append(body);prepareCard(card,id,'entities');
   return card;
+}
+function eventLinks(card,id,event){
+  const sources=new Set(leaves(event.causes).map(node=>node.ref));
+  const destinations=outbound(id);
+  function panel(kind,title,rows){
+    card.append(el('section',{class:'event-relation '+kind,ariaLabel:title},
+      el('strong',{class:'relation-heading'},title),...rows));
+  }
+  function nameLink(key){
+    const link=btn(p.events[key].name,()=>eventDetail(key),'relation-name');
+    link.title=fullEvent(key);return link;
+  }
+  if(sources.size){
+    card.classList.add('has-causes');
+    const positive=new Set(triggers(event.causes));
+    panel('incoming','Причины',Array.from(sources,source=>{
+      const remove=btn('×',()=>{
+        if(busy)return;
+        const next=structuredClone(p);removeCause(next.events[id].causes,source);save(next);
+      },'remove-cause');
+      remove.setAttribute('aria-label','Убрать причину «'+p.events[source].name+'»');
+      return el('div',{class:'relation-row'},positive.has(source)?null:el('small',{},'НЕ'),nameLink(source),remove);
+    }));
+  }
+  if(event.effects.length)panel('state-effects','Смена состояний',event.effects.map((s,i)=>{
+    const route=event.effectPaths?.[i];
+    const link=btn(p.entities[p.states[s].owner].name+' → '+p.states[s].name,()=>stateDetail(s,route),'relation-name');
+    link.title=fullState(s,route);return el('div',{class:'relation-row'},link);
+  }));
+  if(destinations.length)panel('event-effects','Вызывает события',destinations.map(key=>el('div',{class:'relation-row'},nameLink(key))));
 }
 function objectCard(id,obj,point){
   const card=el('article',{class:'spacecard owncard '+tab},el('small',{},tab==='states'?'Состояние':'Событие'));
@@ -495,8 +523,10 @@ function objectCard(id,obj,point){
     const open=btn('↗',()=>openStateCanvas(id),'open-canvas corner-open');
     open.title='Открыть холст состояния';open.setAttribute('aria-label',open.title);card.append(open);
   }else{
-    card.append(btn(obj.name,()=>eventDetail(id),'cardtitle'),el('p',{},obj.desc));
-    card.onclick=e=>{if(!e.target.closest('button'))eventDetail(id);};
+    card.classList.add('event-node');
+    card.append(btn(obj.name,()=>eventDetail(id),'cardtitle'),el('small',{class:'event-owner'},obj.ownerPath?pathLabel(p,obj.ownerPath):p.entities[obj.owner].name),el('p',{},obj.desc));
+    eventLinks(card,id,obj);
+    card.onclick=e=>{if(!e.target.closest('button,.event-relation,.resize-grip'))eventDetail(id);};
   }
   prepareCard(card,id,tab);
   return card;
@@ -510,7 +540,11 @@ function renderBoard() {
     const point=branchLayout(parent,tab).positions?.[id] || [25+i%columns*255,25+Math.floor(i/columns)*240];
     return {point,card:canvasCard(id,groups.get(id),point)};
   });
-  if(tab!=='entities'){
+  if(tab==='events'){
+    renderEventBoard(board,cards);
+    return;
+  }
+  if(tab==='states'){
     let slot=0;
     const positions=parent.layers?.[tab] || {};
     const own=entries(p[tab]).filter(([,obj])=>obj.owner===here() && (tab!=='events' || eventInBranch(obj,path)));
@@ -532,6 +566,40 @@ function renderBoard() {
   board.replaceChildren(...cards.map(item=>item.card));
   if(!cards.length)board.append(el('div',{class:'boardhint'},el('strong',{},'Пустой холст'),
     tab==='entities'?'Поставьте сюда первую сущность.':'Добавьте '+(tab==='states'?'состояние':'событие')+' двойным щелчком по холсту.'));
+}
+function renderEventBoard(board,cards){
+  const positions=p.entities[here()].layers?.events || {};
+  for(const [id,event] of entries(p.events)){
+    if(!eventInBranch(event,path))continue;
+    const point=positions[id] || [0,0];
+    cards.push({point,auto:!positions[id],card:objectCard(id,event,point)});
+  }
+  board.replaceChildren(...cards.map(item=>item.card));
+  const origin=board.getBoundingClientRect(), occupied=[];
+  function footprint(item){
+    const boxes=[item.card,...item.card.querySelectorAll('.event-relation')].map(node=>node.getBoundingClientRect());
+    const left=Math.floor(Math.min(...boxes.map(b=>b.left))-origin.left);
+    const top=Math.floor(Math.min(...boxes.map(b=>b.top))-origin.top);
+    return {x:left,y:top,w:Math.ceil(Math.max(...boxes.map(b=>b.right))-origin.left-left),
+      h:Math.ceil(Math.max(...boxes.map(b=>b.bottom))-origin.top-top)};
+  }
+  for(const item of cards.filter(item=>!item.auto))occupied.push(footprint(item));
+  const viewWidth=$('#content').clientWidth;
+  for(const item of cards.filter(item=>item.auto)){
+    const box=footprint(item);let x=25,y=25;
+    for(;;){
+      const hits=occupied.filter(b=>x<b.x+b.w+25 && x+box.w+25>b.x && y<b.y+b.h+25 && y+box.h+25>b.y);
+      if(!hits.length)break;
+      const right=5*Math.ceil(Math.max(...hits.map(b=>b.x+b.w+25))/5);
+      if(right+box.w<=viewWidth){x=right;continue;}
+      y=5*Math.ceil(Math.min(...hits.map(b=>b.y+b.h+25))/5);x=25;
+    }
+    positionCard(item.card,[x,y]);occupied.push({x,y,w:box.w,h:box.h});
+  }
+  let width=Math.max(1200,viewWidth+480),height=Math.max(900,$('#content').clientHeight+300);
+  for(const b of occupied){width=Math.max(width,b.x+b.w+200);height=Math.max(height,b.y+b.h+200);}
+  board.style.width=width+'px';board.style.height=height+'px';
+  if(!cards.length)board.append(el('div',{class:'boardhint'},'Двойной щелчок по холсту создаст событие.'));
 }
 function render() {
   const id=here(),entity=p.entities[id];

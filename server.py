@@ -60,11 +60,11 @@ def validate(p):
             sizes_for(view.get("sizes", {}), children)
         for kind, layout in entities[key].get("layerSizes", {}).items():
             require(kind in ("states", "events"), "Неизвестный холст")
-            sizes_for(layout, (k for k, obj in p[kind].items() if obj["owner"] == key))
+            sizes_for(layout, events if kind == "events" else (k for k, obj in states.items() if obj["owner"] == key))
         layers = entities[key].get("layers", {})
         require(isinstance(layers, dict) and layers.keys() <= {"states", "events"}, "Неизвестное восприятие")
         for kind, layout in layers.items():
-            coordinates(layout, (i for i, obj in p[kind].items() if obj["owner"] == key))
+            coordinates(layout, events if kind == "events" else (i for i, obj in states.items() if obj["owner"] == key))
         for child in children:
             visit(child)
         active.remove(key)

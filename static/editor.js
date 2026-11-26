@@ -27,74 +27,82 @@ const ownerLabel=(owner,route)=>route?pathLabel(p,route):p.entities[owner].name+
 export const fullState=(id,route)=>ownerLabel(p.states[id].owner,route)+' → '+p.states[id].name;
 export const fullEvent=id=>ownerLabel(p.events[id].owner,p.events[id].ownerPath)+' / '+p.events[id].name;
 
-function searchPicker(caption,choices,onPick){
-  const wrap=el('div',{class:'search-picker'});
-  const trigger=btn(caption,()=>{
-    if(wrap.children.length>1){wrap.lastElementChild.remove();return;}
-    const input=el('input',{type:'search',placeholder:'Введите название или часть пути',ariaLabel:caption});
-    const list=el('div',{class:'picker-results'});
-    function filter(){
-      list.replaceChildren();
-      const terms=input.value.toLocaleLowerCase().split(/\s+/).filter(Boolean);
-
-      for(const item of choices()){
-        if(!terms.every(term=>item.label.toLocaleLowerCase().includes(term)))continue;
-        list.append(btn(item.label,()=>onPick(item),'choice'));
-        if(list.childElementCount===75){list.append(el('small',{},'Уточните поиск для остальных результатов'));break;}
-      }
-      if(!list.childElementCount)list.append(el('small',{},'Совпадений нет'));
-    }
-    input.oninput=filter;
-    input.onkeydown=e=>{
-      if(e.key==='Enter'){e.preventDefault();list.querySelector('button')?.click();}
-      if(e.key==='Escape'){e.preventDefault();e.stopPropagation();wrap.lastElementChild.remove();trigger.focus();}
-    };
-    wrap.append(el('div',{class:'picker-panel'},input,list));filter();input.focus();
-  },'pick-trigger');
-  wrap.append(trigger);return wrap;
-}
-function* eventChoices(){
-  for(const [key] of entries(p.events))yield {key,label:fullEvent(key)};
+function eventPicker(caption,onPick,allowed=()=>true,open=false){
+  return visualTree(caption,{multiple:false,eligible:()=>false,eventFilter:allowed,open,
+    apply:(_route,id)=>onPick(id)});
 }
 function statesOf(owner){return entries(p.states).filter(([,s])=>s.owner===owner);}
-function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=false}){
+function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=false,eventFilter=null,open=false}){
   const wrap=el('div',{class:'visual-picker'});
   const launch=btn(caption,()=>{
     if(wrap.querySelector('.tree-panel'))return;
     const selected=new Map(initial.filter(Boolean).map(route=>[route.join('/'),route]));
-    const search=el('input',{type:'search',placeholder:stateMode?'Название сущности или состояния…':'Найти сущность по названию…',ariaLabel:'Подсветить совпадения'});
-    const records=[], count=el('small',{ariaLive:'polite'});
-    function record(title){
-      const label=el('span',{},title);records.push({label,title});return label;
+    const search=el('input',{type:'search',placeholder:eventFilter?'Название события или сущности…':stateMode?'Название сущности или состояния…':'Найти сущность по названию…',ariaLabel:'Подсветить совпадения'});
+    const folders=new Map();
+    const eventsByOwner=new Map();
+    if(eventFilter)for(const [id,event] of entries(p.events)){
+      if(!eventFilter(id))continue;
+      if(!eventsByOwner.has(event.owner))eventsByOwner.set(event.owner,[]);
+      eventsByOwner.get(event.owner).push([id,event]);
     }
-    function branch(route){
+    const records=[], count=el('small',{ariaLive:'polite'});
+    function record(title,ancestors,addr){
+      const label=el('span',{},title);
+      const context=ancestors.map(key=>p.entities[key.split('/').at(-1)].name).concat(title).join(' ').toLocaleLowerCase();
+      records.push({label,title,ancestors,addr,context});return label;
+    }
+    function branch(route,ancestors=[]){
       const key=route.at(-1),entity=p.entities[key],addr=route.join('/');
-      const name=record(entity.name),allowed=eligible(route);
+      const name=record(entity.name,ancestors,addr),allowed=eligible(route);
       let row;
-      if(multiple){
-        const check=el('input',{type:'checkbox',checked:selected.has(addr),disabled:!allowed,
+      if(multiple && allowed){
+        const check=el('input',{type:'checkbox',checked:selected.has(addr),
           onchange:e=>{if(e.target.checked)selected.set(addr,route);else selected.delete(addr);}});
         row=el('label',{class:'tree-node',title:pathLabel(p,route)},check,name);
-      }else if(allowed && !stateMode){
+      }else if(!multiple && allowed && !stateMode && !eventFilter){
         row=btn('',()=>apply(route),'tree-node');row.append(name);
       }else row=el('span',{class:'tree-node'},name);
-      const item=el('li',{},row);
+      const contents=el('div',{class:'tree-contents'}),trail=[...ancestors,addr];
       if(stateMode)for(const [id,s] of statesOf(key)){
-        const pick=btn('',()=>apply(route,id),'tree-state');pick.append('→ ',record(s.name));item.append(pick);
+        const pick=btn('',()=>apply(route,id),'tree-state');pick.append('→ ',record(s.name,trail));contents.append(pick);
       }
-      if(entity.children.length)item.append(el('ul',{},entity.children.map(child=>branch([...route,child]))));
-      return item;
+      for(const [id,event] of eventsByOwner.get(key) || []){
+        if(event.ownerPath && !addr.endsWith('/'+event.ownerPath.join('/')) && addr!==event.ownerPath.join('/'))continue;
+        const pick=btn('',()=>apply(route,id),'tree-state');pick.append('↳ ',record(event.name,trail));contents.append(pick);
+      }
+      if(entity.children.length)contents.append(el('ul',{},entity.children.map(child=>branch([...route,child],trail))));
+      const line=el('div',{class:'tree-line'});
+      if(contents.childElementCount){
+        const folder={manual:true,show(expanded){
+          contents.hidden=!expanded;toggle.textContent=expanded?'−':'+';
+          toggle.setAttribute('aria-expanded',String(expanded));
+          toggle.setAttribute('aria-label',(expanded?'Свернуть ':'Развернуть ')+entity.name);
+        }};
+        const toggle=btn('',()=>{
+          const expanded=contents.hidden;
+          if(!search.value.trim())folder.manual=expanded;
+          folder.show(expanded);
+        },'tree-toggle');
+        folders.set(addr,folder);folder.show(true);line.append(toggle);
+      }else line.append(el('span',{class:'toggle-space'}));
+      line.append(row);return el('li',{},line,contents);
     }
     const nested=new Set(Object.values(p.entities).flatMap(e=>e.children));
     const roots=Object.keys(p.entities).filter(id=>!nested.has(id));
     const tree=el('ul',{class:'project-tree'},roots.map(id=>branch([id])));
     function highlight(){
       const query=search.value.trim().toLocaleLowerCase();let matches=0;
-      for(const {label,title} of records){
-        const ix=query?title.toLocaleLowerCase().indexOf(query):-1;
-        if(ix<0){label.textContent=title;continue;}
-        matches++;label.replaceChildren(title.slice(0,ix),el('mark',{},title.slice(ix,ix+query.length)),title.slice(ix+query.length));
+      const reveal=new Set();
+      const terms=query.split(/\s+/).filter(Boolean);
+      for(const {label,title,ancestors,addr,context} of records){
+        const name=title.toLocaleLowerCase();
+        const term=terms.find(word=>name.includes(word));
+        if(!term || !terms.every(word=>context.includes(word))){label.textContent=title;continue;}
+        ancestors.forEach(key=>reveal.add(key));if(addr)reveal.add(addr);
+        const ix=name.indexOf(term);
+        matches++;label.replaceChildren(title.slice(0,ix),el('mark',{},title.slice(ix,ix+term.length)),title.slice(ix+term.length));
       }
+      for(const [key,folder] of folders)folder.show(folder.manual || (Boolean(query) && reveal.has(key)));
       count.textContent=query?'Совпадений '+matches:'';
     }
     search.oninput=highlight;
@@ -102,9 +110,9 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
     const panel=el('section',{class:'tree-panel'},search,count,tree,
       el('div',{class:'addrow'},multiple?btn('Применить выбор',()=>apply([...selected.values()]),'primary'):null,
         btn('Закрыть',()=>{panel.remove();launch.hidden=false;launch.focus();})));
-    wrap.append(panel);launch.hidden=true;search.focus();
+    wrap.append(panel);launch.hidden=true;queueMicrotask(()=>{if(search.isConnected)search.focus();});
   },'pick-trigger');
-  wrap.append(launch);return wrap;
+  wrap.append(launch);if(open)launch.click();return wrap;
 }
 function conditionFields(node,draw){
   const refs=node.refs, paths=node.paths??=refs.map(()=>null);
@@ -163,7 +171,32 @@ function ruleBoard(root,kind,event,draw){
   let dragging=null;
   function contains(node,target){return node===target || node.items?.some(child=>contains(child,target));}
   function slot(parent,index){
-    const zone=el('div',{class:'rule-slot'},parent.items.length?'':'Поместите блок сюда');
+    const locked=parent.op==='not' && parent.items.length>0;
+    const caption=kind==='causes'?'Выбрать событие-причину':'Выбрать условие';
+    const zone=el('div',{class:'rule-slot'+(locked?' drop-only':'')});
+    function insert(child){
+      parent.items.splice(index,0,child);draw();
+    }
+    if(!locked)zone.append(btn(caption,()=>{
+      board.querySelector('.slot-chooser')?.remove();
+      const panel=el('div',{class:'slot-chooser'});
+      zone.after(panel);
+      if(kind==='causes'){
+        panel.append(eventPicker(caption,id=>insert({op:'event',neg:false,ref:id}),()=>true,true));
+      }else if(event.scope==='local'){
+        const pick=ref=>insert({op:'self',neg:false,refs:ref?[ref]:[],paths:ref?[event.ownerPath]:[]});
+        panel.append(el('small',{},ownerLabel(event.owner,event.ownerPath)),
+          btn('Любое состояние',()=>pick(null),'choice'),
+          ...statesOf(event.owner).map(([id,s])=>btn(s.name,()=>pick(id),'choice')));
+      }else{
+        const mode=selector([['all','Все из'],['any','Любой из']],'all',()=>{});
+        panel.append(mode,visualTree(caption,{open:true,eligible:r=>statesOf(r.at(-1)).length>0,
+          apply:routes=>{
+            if(!routes.length)return notice('Выберите сущность для проверки.');
+            insert({op:mode.value,neg:false,refs:routes.map(()=>''),paths:routes});
+          }}));
+      }
+    },'slot-label'));
     function accepts(){
       if(!dragging || contains(dragging.node,parent))return false;
       return parent.op!=='not' || !parent.items.length || dragging.parent===parent;
@@ -204,11 +237,9 @@ function ruleBoard(root,kind,event,draw){
       shell.append(slot(node,node.items.length));
       if(node.op==='not' && node.items.length)return shell;
       const append=child=>{node.items.push(child);draw();};
-      const add=kind==='conditions'?btn('+ Условие',()=>append({op:event.scope==='local'?'self':'any',neg:false,refs:[],paths:[]})):
-        searchPicker('＋ Причина',eventChoices,({key})=>append({op:'event',neg:false,ref:key}));
-      shell.append(el('div',{class:'addrow'},add,...['and','or','not'].map(op=>btn('+ '+words[op],()=>append({op,neg:false,items:[]})))));
+      shell.append(el('div',{class:'addrow'},...['and','or','not'].map(op=>btn('+ '+words[op],()=>append({op,neg:false,items:[]})))));
     }else if(kind==='causes'){
-      shell.append(el('p',{},fullEvent(node.ref)),searchPicker('Сменить событие',eventChoices,({key})=>{node.ref=key;draw();}));
+      shell.append(el('p',{},fullEvent(node.ref)),eventPicker('Сменить событие',id=>{node.ref=id;draw();}));
     }else if(node.op==='self'){
       const options=statesOf(event.owner).map(([id,s])=>[id,s.name]);
       shell.append(el('p',{},ownerLabel(event.owner,event.ownerPath)),selector([['','Любое состояние'],...options],node.refs[0] || '',v=>{
@@ -257,7 +288,7 @@ export function editEvent(owner,id,point=null,scope='local') {
       if(id===key)continue;
       effects.append(el('div',{class:'effectline'},el('span',{},'Вызвать → '+fullEvent(id)),btn('Убрать',()=>{outgoing.delete(id);draw();},'unlink')));
     }
-    function* availableEvents(){for(const item of eventChoices())if(item.key!==key && !outgoing.has(item.key))yield item;}
+
     const emitter=event.scope==='global'?el('strong',{},'Глобальное событие'):
       el('div',{class:'emitter'},el('small',{},'Источник события'),el('p',{},ownerLabel(owner,event.ownerPath)));
     if(!event.scope)emitter.append(visualTree('Выбрать размещение',{multiple:false,eligible:r=>r.at(-1)===owner,
@@ -267,7 +298,7 @@ export function editEvent(owner,id,point=null,scope='local') {
       el('h3',{},'Причины'),ruleBoard(event.causes,'causes',event,draw),
       el('h3',{},'Последствия'),effects,
       visualTree('＋ Смена состояния',{multiple:false,stateMode:true,eligible:()=>true,apply:(route,key)=>{event.effects.push(key);event.effectPaths.push(route);draw();}}),
-      searchPicker('＋ Вызвать событие',availableEvents,({key})=>{outgoing.add(key);draw();}),
+      eventPicker('＋ Вызвать событие',id=>{outgoing.add(id);draw();},id=>id!==key && !outgoing.has(id)),
       footer(id?btn('Удалить событие',()=>deleteObj('events',id),'danger'):null,el('button',{class:'primary',type:'submit'},'Сохранить правило')));
     modal(id?'Редактировать событие':'Новое событие',form);
     document.querySelector('dialog').scrollTop=scroll;
