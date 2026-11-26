@@ -96,7 +96,7 @@ def validate(p):
         for edge_key, bends in layout["bends"].items():
             parts = edge_key.split("|")
             require(len(parts) == 3 and parts[0] in nodes and parts[2] in nodes and
-                    parts[1] in ("cause", "condition", "effect"), "Неизвестная связь")
+                    parts[1] in ("cause", "not-cause", "condition", "not-condition", "effect"), "Неизвестная связь")
             require(isinstance(bends, list), "Неверные точки поворота")
             coordinates(dict(enumerate(bends)), range(len(bends)))
 

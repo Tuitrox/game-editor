@@ -160,7 +160,8 @@ button.rule-ref:hover{text-decoration:underline}
 .graph-card small,.graph-owner{font-size:11px;color:#536360}
 .graph-open{position:absolute;top:8px;right:8px;padding:0 5px;font-size:14px}
 .wire.cause{color:#ad692b}.wire.effect{color:#327fa6}.wire.condition{color:#427952}
-.wire.condition .wire-line{stroke-dasharray:6 3}
+.wire.not-cause,.wire.not-condition{color:#ba383c}
+.wire.condition .wire-line,.wire.not-condition .wire-line{stroke-dasharray:6 3}
 .graph-card.graph-origin{outline:3px solid #284e42;outline-offset:2px}
 .spacecard.graph-muted{opacity:.28}.wire.graph-muted{opacity:.16}.wire.graph-lit .wire-line{stroke-width:3}
 

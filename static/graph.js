@@ -14,31 +14,41 @@ export function projectGraph(project, path, inBranch) {
     }
   }
   const visible = new Set(locals);
-  function link(from, to, role, label, statePath) {
+  function link(from, to, role, label, statePath, negated = false) {
     const stateKey = role === 'condition' ? from : role === 'effect' ? to : null;
     const local = key => locals.has(key) && (root || key !== stateKey || !statePath ||
       inBranch({owner:nodes.get(key).obj.owner, ownerPath:statePath}, path));
     if (!local(from) && !local(to)) return;
     visible.add(from); visible.add(to);
-    const key = [from, role, to].join('|');
-    if (!edges.has(key)) edges.set(key, {key, from, to, role, labels:[]});
+    const wireRole = negated ? 'not-' + role : role;
+    const key = [from, wireRole, to].join('|');
+    if (!edges.has(key)) edges.set(key, {key, from, to, role:wireRole, labels:[]});
     const edge = edges.get(key);
     if (!edge.labels.includes(label)) edge.labels.push(label);
   }
-  function walk(rule, apply, trail = []) {
+  function walk(rule, apply, trail = [], inheritedNegation = false) {
     const names = {and:'И', or:'ИЛИ', not:'НЕ', all:'Все из', any:'Любой из'};
     const labels = [...trail];
     if (rule.neg) labels.push('НЕ');
     if (names[rule.op]) labels.push(names[rule.op]);
-    if (rule.items) for (const item of rule.items) walk(item, apply, labels);
-    else apply(rule, labels.join(' › '));
+    const negated = (inheritedNegation !== Boolean(rule.neg)) !== (rule.op === 'not');
+    if (rule.items) for (const item of rule.items) walk(item, apply, labels, negated);
+    else apply(rule, labels.join(' › '), negated);
   }
   for (const [id, e] of Object.entries(project.events)) {
     const event = 'events:' + id;
-    walk(e.causes, (leaf, label) => link('events:'+leaf.ref, event, 'cause', 'Причина · '+label));
-    walk(e.conditions, (leaf, label) => leaf.refs.forEach((ref,i) =>
-      link('states:'+ref, event, 'condition', 'Условие · '+label, leaf.paths?.[i])));
+    walk(e.causes, (leaf, label, negated) =>
+      link('events:'+leaf.ref, event, 'cause', 'Причина · '+label, undefined, negated));
+    walk(e.conditions, (leaf, label, negated) => leaf.refs.forEach((ref,i) =>
+      link('states:'+ref, event, 'condition', 'Условие · '+label, leaf.paths?.[i], negated)));
     e.effects.forEach((ref,i) => link(event, 'states:'+ref, 'effect', 'Устанавливает состояние', e.effectPaths?.[i]));
+  }
+  // Keep existing hand-edited bends. Only a second polarity needs a new layout key.
+  for (const edge of edges.values()) {
+    if (edge.role.startsWith('not-')) {
+      const original = [edge.from, edge.role.slice(4), edge.to].join('|');
+      if (!edges.has(original)) edge.key = original;
+    }
   }
   return {nodes:[...visible].sort().map(k => nodes.get(k)), edges:[...edges.values()].sort((a,b) => a.key.localeCompare(b.key,'en'))};
 }
