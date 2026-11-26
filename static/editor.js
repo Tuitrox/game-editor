@@ -22,7 +22,7 @@ function addCause(target,id) {
   else if(group.op==='or' && !group.neg)group.items.push(leaf);
   else target.causes={op:'or',neg:false,items:[group,leaf]};
 }
-const words={and:'И',or:'ИЛИ',not:'НЕ',all:'Все из',any:'Любой из',self:'Источник события'};
+const words={and:'И',or:'ИЛИ',not:'НЕ',all:'Все из',any:'Любой из'};
 const ownerLabel=(owner,route)=>route?pathLabel(p,route):p.entities[owner].name+' (без привязки к размещению)';
 export const fullState=(id,route)=>ownerLabel(p.states[id].owner,route)+' → '+p.states[id].name;
 export const fullEvent=id=>{
@@ -177,17 +177,30 @@ function conditionFields(node,draw){
   }
   return group;
 }
+function ruleGroup(op,children){
+  if(!children.length)return el('p',{class:'empty'},'Не заданы');
+  if(children.length===1 && op!=='not')return children[0];
+  return el('div',{class:'read-group tone-'+op},
+    el('div',{class:'operator-rail'},el('strong',{},words[op])),
+    el('div',{class:'rule-children'},children));
+}
+export function ruleReference(kind,id,route,place){
+  const isEvent=kind==='event', obj=isEvent?p.events[id]:p.states[id];
+  if(isEvent)route=obj.ownerPath;
+  const owner=place ?? (route?pathLabel(p,route.slice(-2)):p.entities[obj.owner].name);
+  const caption=isEvent?(obj.scope==='global'?obj.name:owner+' / '+obj.name):owner+' → '+obj.name;
+  const title=isEvent?fullEvent(id):fullState(id,route);
+  return el('button',{type:'button',class:'rule-ref ref-'+kind,title,ariaLabel:title,
+    onclick:()=>isEvent?eventDetail(id):stateDetail(id,route)},caption);
+}
 export function describeRule(n,event) {
-  if(n.items && !n.items.length)return el('p',{class:'empty'},'Не заданы');
-  const clause=el('div',{class:'clause'});
-  if(n.neg)clause.append(el('b',{class:'not'},'НЕ '));
-  if(n.items) {
-    if(n.items.length>1 || n.op==='not')clause.append(el('strong',{},words[n.op]));
-    clause.append(...n.items.map(child=>describeRule(child,event)));
-  } else if(n.op==='event')clause.append(btn(fullEvent(n.ref),()=>eventDetail(n.ref),'link'));
-  else if(n.op==='self')clause.append(ownerLabel(event.owner,event.ownerPath)+' → '+(p.states[n.refs[0]]?.name || 'Любое состояние'));
-  else clause.append(el('strong',{},words[n.op]),...n.refs.map((id,i)=>btn(fullState(id,n.paths?.[i]),()=>stateDetail(id,n.paths?.[i]),'link')));
-  return clause;
+  if(n.neg)return ruleGroup('not',[describeRule({...n,neg:false},event)]);
+  if(n.items)return ruleGroup(n.op,n.items.map(child=>describeRule(child,event)));
+  if(n.op==='event')return ruleReference('event',n.ref);
+  if(n.op==='self')return n.refs.length?ruleReference('state',n.refs[0],event.ownerPath):
+    el('span',{class:'rule-ref ref-state'},p.entities[event.owner].name+' → Любое состояние');
+  return ruleGroup(n.op,conditionMembers(n).map((m,i)=>ruleReference('state',n.refs[i],m.route,
+    [m.route && m.place,m.name].filter(Boolean).join(' › '))));
 }
 function selector(items,value,change) {
   const control=el('select',{onchange:e=>change(e.target.value)},...items.map(([v,text])=>option(v,text)));
@@ -258,11 +271,18 @@ function ruleBoard(root,kind,event,draw){
         board.querySelectorAll('.target').forEach(x=>x.classList.remove('target'));};
       head.append(handle);
     }
-    if(node.items && node.op!=='not')head.append(selector([['and','И'],['or','ИЛИ']],node.op,v=>{node.op=v;draw();}));
-    else if(node.items)head.append(el('strong',{},'НЕ'));
-    else if(kind==='conditions' && node.op!=='self')
-      head.append(selector([['all','Все из'],['any','Любой из']],node.op,v=>node.op=v));
-    else head.append(el('strong',{},kind==='causes'?'Событие':'Состояние источника'));
+    if(node.items){
+      const operator=node.op==='not'?el('strong',{},'НЕ'):
+        selector([['and','И'],['or','ИЛИ']],node.op,v=>{node.op=v;draw();});
+      shell.classList.add('edit-group','tone-'+node.op);
+      if(node.items.length<2 && node.op!=='not')shell.classList.add('single-rule');
+      shell.prepend(el('div',{class:'operator-rail'},operator));
+    }
+    else if(kind==='conditions' && node.op!=='self'){
+      shell.classList.add('tone-'+node.op);
+      head.append(selector([['all','Все из'],['any','Любой из']],node.op,v=>{node.op=v;draw();}));
+    }
+    else head.append(el('strong',{},kind==='causes'?'Событие':'Состояние'));
     if(parent)head.append(removeButton('Убрать блок',()=>{parent.items.splice(parent.items.indexOf(node),1);draw();}));
     if(node.items){
       node.items.forEach((child,i)=>shell.append(slot(node,i),block(child,node)));
@@ -271,7 +291,7 @@ function ruleBoard(root,kind,event,draw){
       const append=child=>{node.items.push(child);draw();};
       shell.append(el('div',{class:'addrow'},...['and','or','not'].map(op=>btn('+ '+words[op],()=>append({op,neg:false,items:[]})))));
     }else if(kind==='causes'){
-      shell.append(el('p',{},fullEvent(node.ref)),eventPicker('Сменить событие',id=>{node.ref=id;draw();}));
+      shell.append(el('p',{class:'rule-ref ref-event'},fullEvent(node.ref)),eventPicker('Сменить событие',id=>{node.ref=id;draw();}));
     }else if(node.op==='self'){
       const options=statesOf(event.owner).map(([id,s])=>[id,s.name]);
       shell.append(el('p',{},ownerLabel(event.owner,event.ownerPath)),selector([['','Любое состояние'],...options],node.refs[0] || '',v=>{
@@ -286,7 +306,6 @@ function ruleBoard(root,kind,event,draw){
 export function editEvent(owner,id,point=null,scope='local') {
   const key=id || uid();
   const event=id?structuredClone(p.events[id]):{name:'',desc:'',owner,scope,ownerPath:scope==='local'?currentOwnerPath(owner):null,conditions:newGroup(),causes:newGroup(),effects:[]};
-  if(!id && scope==='local')event.conditions.items.push({op:'self',neg:false,refs:[],paths:[]});
   for(const field of ['conditions','causes']){
     const normalized=normalizeNegations(event[field]);
     event[field]=normalized.op==='not'?{...newGroup(),items:[normalized]}:normalized;
@@ -314,21 +333,19 @@ export function editEvent(owner,id,point=null,scope='local') {
     const scroll=document.querySelector('dialog').scrollTop;
     const effects=el('div',{class:'effects'});
     for(const [index,state] of event.effects.entries())effects.append(el('div',{class:'effectline'},
-      el('span',{},fullState(state,event.effectPaths[index])),
+      el('span',{class:'rule-ref ref-state'},fullState(state,event.effectPaths[index])),
       btn('Убрать',()=>{event.effects.splice(index,1);event.effectPaths.splice(index,1);draw();},'unlink')));
     for(const id of outgoing) {
       if(id===key)continue;
-      effects.append(el('div',{class:'effectline'},el('span',{},'Вызвать → '+fullEvent(id)),btn('Убрать',()=>{outgoing.delete(id);draw();},'unlink')));
+      effects.append(el('div',{class:'effectline'},el('span',{class:'rule-ref ref-event'},fullEvent(id)),btn('Убрать',()=>{outgoing.delete(id);draw();},'unlink')));
     }
 
-    const emitter=event.scope==='global'?el('strong',{},'Глобальное событие'):
-      el('div',{class:'emitter'},el('small',{},'Источник события'),el('p',{},ownerLabel(owner,event.ownerPath)));
-    const form=el('form',{onsubmit:e=>{e.preventDefault();commit();}},...fields(event),emitter,
+    const form=el('form',{onsubmit:e=>{e.preventDefault();commit();}},...fields(event),
       el('h3',{},'Условия'),ruleBoard(event.conditions,'conditions',event,draw),
       el('h3',{},'Причины'),ruleBoard(event.causes,'causes',event,draw),
       el('h3',{},'Последствия'),effects,
       visualTree('＋ Смена состояния',{multiple:false,stateMode:true,eligible:()=>true,apply:(route,key)=>{event.effects.push(key);event.effectPaths.push(route);draw();}}),
-      eventPicker('＋ Вызвать событие',id=>{outgoing.add(id);draw();},id=>id!==key && !outgoing.has(id)),
+      eventPicker('＋ Событие',id=>{outgoing.add(id);draw();},id=>id!==key && !outgoing.has(id)),
       footer(id?btn('Удалить событие',()=>deleteObj('events',id),'danger'):null,el('button',{class:'primary',type:'submit'},'Сохранить правило')));
     modal(id?'Редактировать событие':'Новое событие',form);
     document.querySelector('dialog').scrollTop=scroll;

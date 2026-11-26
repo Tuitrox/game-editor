@@ -1,4 +1,4 @@
-import {editEvent, leaves, describeRule, removeCause, triggers, fullEvent, fullState} from './editor.js';
+import {editEvent, leaves, describeRule, removeCause, triggers, fullEvent, fullState, ruleReference} from './editor.js';
 
 import {wireLayer} from './wires.js';
 import {pathLabel} from './routes.js';
@@ -316,11 +316,12 @@ export function outbound(id,project=p) {
 }
 function eventDetail(id) {
   const e=p.events[id];
-  modal(e.name,btn(e.ownerPath?pathLabel(p,e.ownerPath):p.entities[e.owner].name,()=>go(e.owner,e.ownerPath),'link'),el('p',{},e.desc),
+  const targets=outbound(id);
+  modal(e.name,...(e.desc?[el('p',{},e.desc)]:[]),
     el('h3',{},'Условия'),describeRule(e.conditions,e),el('h3',{},'Причины'),describeRule(e.causes,e),
-    el('h3',{},'Последствия'),...e.effects.map((s,i)=>btn(fullState(s,e.effectPaths?.[i]),()=>stateDetail(s,e.effectPaths?.[i]),'effect')),
-    ...outbound(id).map(k=>btn('Вызвать событие → '+fullEvent(k),()=>eventDetail(k),'effect')),
-    e.effects.length+outbound(id).length?el('span'):blank('Последствий пока нет'),
+    el('h3',{},'Последствия'),e.effects.length+targets.length?el('div',{class:'rule-children'},
+      ...e.effects.map((s,i)=>ruleReference('state',s,e.effectPaths?.[i])),
+      ...targets.map(k=>ruleReference('event',k))):blank('Последствий пока нет'),
     footer(btn('Редактировать правило',()=>editEvent(e.owner,id),'primary')));
 }
 export {eventDetail,stateDetail};
@@ -537,7 +538,7 @@ function objectCard(id,obj,point){
     open.title='Открыть холст состояния';open.setAttribute('aria-label',open.title);card.append(open);
   }else{
     card.classList.add('event-node');
-    card.append(btn(obj.name,()=>eventDetail(id),'cardtitle'),el('small',{class:'event-owner'},obj.ownerPath?pathLabel(p,obj.ownerPath):p.entities[obj.owner].name),el('p',{},obj.desc));
+    card.append(btn(obj.name,()=>eventDetail(id),'cardtitle'),el('p',{},obj.desc));
     eventLinks(card,id,obj);
     card.onclick=e=>{if(!e.target.closest('button,.event-relation,.resize-grip'))eventDetail(id);};
   }
