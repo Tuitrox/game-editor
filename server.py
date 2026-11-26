@@ -158,8 +158,9 @@ def validate(p):
             param_type = entities[owner]["parameters"][ref].get("type", "number")
             value, compare = node["value"], node["compare"]
             if param_type == "number":
-                require(compare in ("lt", "le", "eq", "ge", "gt") and
-                        type(value) in (int, float) and 0 <= value <= 100, "Укажите процент от 0 до 100")
+                require(compare in ("lt", "le", "eq", "ge", "gt"), "Выберите знак сравнения")
+                require(value == "constant" or (type(value) in (int, float) and 0 <= value <= 100),
+                        "Укажите процент от 0 до 100 или выберите константу")
             elif param_type == "boolean":
                 require(compare == "eq" and type(value) is bool, "Выберите Да или Нет")
             else:

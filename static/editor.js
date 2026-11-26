@@ -220,8 +220,20 @@ function parameterFields(node){
   if(type==='number'){
     const compare=selector(entries(comparisons),node.compare,v=>{node.compare=v;});
     compare.ariaLabel='Сравнение';
-    fields.append(compare,el('input',{type:'number',min:0,max:100,step:'any',required:true,value:node.value,
-      ariaLabel:'Процент от максимума',oninput:e=>{node.value=e.target.value===''?null:e.target.valueAsNumber;}}),'%');
+    const percent=el('input',{type:'number',min:0,max:100,step:'any',required:true,
+      value:node.value==='constant'?'':node.value,ariaLabel:'Процент от максимума',
+      oninput:()=>{node.value=percent.value===''?null:percent.valueAsNumber;}});
+    function setThreshold(mode){
+      const constant=mode==='constant';
+      percent.hidden=percent.disabled=constant;
+      if(constant)node.value='constant';
+      else node.value=percent.value===''?null:percent.valueAsNumber;
+    }
+    const mode=node.value==='constant'?'constant':'percent';
+    const threshold=selector([['percent','% от максимума'],['constant','Константа']],mode,setThreshold);
+    threshold.ariaLabel='Тип порога';
+    setThreshold(mode);
+    fields.append(compare,percent,threshold);
   }else if(type==='boolean'){
     const choice=selector([['true','Да'],['false','Нет']],String(node.value),v=>{node.value=v==='true';});
     choice.ariaLabel='Проверяемое значение';fields.append(choice);
