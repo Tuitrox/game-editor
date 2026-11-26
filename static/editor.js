@@ -23,9 +23,12 @@ function addCause(target,id) {
   else target.causes={op:'or',neg:false,items:[group,leaf]};
 }
 const words={and:'И',or:'ИЛИ',not:'НЕ',all:'Все из',any:'Любой из',self:'Источник события'};
-const ownerLabel=(owner,route)=>route?pathLabel(p,route):p.entities[owner].name+' (общая сущность)';
+const ownerLabel=(owner,route)=>route?pathLabel(p,route):p.entities[owner].name+' (без привязки к размещению)';
 export const fullState=(id,route)=>ownerLabel(p.states[id].owner,route)+' → '+p.states[id].name;
-export const fullEvent=id=>ownerLabel(p.events[id].owner,p.events[id].ownerPath)+' / '+p.events[id].name;
+export const fullEvent=id=>{
+  const event=p.events[id];
+  return (event.scope==='global'?'Глобальное событие':ownerLabel(event.owner,event.ownerPath))+' / '+event.name;
+};
 
 function eventPicker(caption,onPick,allowed=()=>true,open=false){
   return visualTree(caption,{multiple:false,eligible:()=>false,eventFilter:allowed,open,
@@ -114,15 +117,41 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
   },'pick-trigger');
   wrap.append(launch);if(open)launch.click();return wrap;
 }
+function removeButton(caption,action){
+  return el('button',{type:'button',class:'unlink rule-remove',title:caption,ariaLabel:caption,onclick:action},'×');
+}
+function conditionMembers(node){
+  const members=node.refs.map((id,i)=>{
+    const route=node.paths?.[i], owner=route?.at(-1) ?? p.states[id].owner;
+    return {owner,name:p.entities[owner].name,route,state:p.states[id]?.name,
+      parents:route?.slice(0,-1).map(key=>p.entities[key].name) ?? []};
+  });
+  for(const member of members){
+    if(!member.route){member.place='Без привязки к размещению';continue;}
+    const peers=members.filter(other=>other!==member && other.name===member.name && other.route);
+    const parents=member.parents;
+    let depth=1;
+    while(depth<parents.length && peers.some(other=>other.parents.slice(-depth).join(' › ')===parents.slice(-depth).join(' › ')))depth++;
+    member.place=parents.slice(-depth).join(' › ');
+  }
+  return members;
+}
 function conditionFields(node,draw){
   const refs=node.refs, paths=node.paths??=refs.map(()=>null);
   const ownerAt=i=>paths[i]?.at(-1) ?? p.states[refs[i]].owner;
   const group=el('div',{class:'condition-members'});
-  refs.forEach((key,i)=>{
-    group.append(el('div',{class:'effectline'},el('span',{},ownerLabel(ownerAt(i),paths[i])+' → '+(p.states[key]?.name || 'Выберите состояние')),
-      btn('Убрать',()=>{refs.splice(i,1);paths.splice(i,1);draw();},'unlink')));
+  const members=conditionMembers(node);
+  const sameOwner=members.length>0 && members.every(m=>m.owner===members[0].owner && m.place);
+  const mixedStates=new Set(members.map(m=>m.state)).size>1;
+  if(sameOwner)group.append(el('strong',{},members[0].name));
+  const chips=el('div',{class:'member-chips'});
+  members.forEach((m,i)=>{
+    const place=sameOwner?m.place:[m.place,m.name].filter(Boolean).join(' › ');
+    const title=ownerLabel(m.owner,m.route);
+    chips.append(el('span',{class:'member-chip',title},place+(mixedStates?' → '+(m.state || 'Выберите состояние'):''),
+      removeButton('Убрать '+title,()=>{refs.splice(i,1);paths.splice(i,1);draw();})));
   });
-  group.append(visualTree('Выбрать сущности на дереве',{
+  group.append(chips,visualTree(members.length?'Изменить выбор':'Выбрать сущности',{
     initial:paths,eligible:route=>statesOf(route.at(-1)).length>0,
     apply:routes=>{
       const old=new Map(paths.map((route,i)=>[route?.join('/'),refs[i]]));
@@ -139,9 +168,11 @@ function conditionFields(node,draw){
     const names=[...new Set(options[0].map(([,s])=>s.name))].filter(name=>options.every(row=>row.some(([,s])=>s.name===name)));
     const name=p.states[refs[0]]?.name;
     const selected=name && refs.every(key=>p.states[key]?.name===name)?name:'';
-    group.append(label('Состояние для всей группы',selector([['','Выберите состояние'],...names.map(v=>[v,v])],selected,v=>{
+    const stateSelect=selector([['','Выберите состояние'],...names.map(v=>[v,v])],selected,v=>{
       if(v){node.refs=options.map(row=>row.find(([,s])=>s.name===v)[0]);draw();}
-    })));
+    });
+    stateSelect.ariaLabel='Состояние для всей группы';
+    group.append(el('label',{class:'member-state'},'Состояние',stateSelect));
     if(!names.length)group.append(el('small',{},'У выбранных сущностей нет общего названия состояния. Используйте отдельную проверку для другой группы.'));
   }
   return group;
@@ -173,11 +204,12 @@ function ruleBoard(root,kind,event,draw){
   function slot(parent,index){
     const locked=parent.op==='not' && parent.items.length>0;
     const caption=kind==='causes'?'Выбрать событие-причину':'Выбрать условие';
-    const zone=el('div',{class:'rule-slot'+(locked?' drop-only':'')});
+    const compact=parent.items.length>0;
+    const zone=el('div',{class:'rule-slot'+(locked?' drop-only':compact?' compact-slot':'')});
     function insert(child){
       parent.items.splice(index,0,child);draw();
     }
-    if(!locked)zone.append(btn(caption,()=>{
+    if(!locked)zone.append(el('button',{type:'button',class:'slot-label',title:caption,ariaLabel:caption,onclick:()=>{
       board.querySelector('.slot-chooser')?.remove();
       const panel=el('div',{class:'slot-chooser'});
       zone.after(panel);
@@ -196,7 +228,7 @@ function ruleBoard(root,kind,event,draw){
             insert({op:mode.value,neg:false,refs:routes.map(()=>''),paths:routes});
           }}));
       }
-    },'slot-label'));
+    }},compact?'+':caption));
     function accepts(){
       if(!dragging || contains(dragging.node,parent))return false;
       return parent.op!=='not' || !parent.items.length || dragging.parent===parent;
@@ -231,7 +263,7 @@ function ruleBoard(root,kind,event,draw){
     else if(kind==='conditions' && node.op!=='self')
       head.append(selector([['all','Все из'],['any','Любой из']],node.op,v=>node.op=v));
     else head.append(el('strong',{},kind==='causes'?'Событие':'Состояние источника'));
-    if(parent)head.append(btn('Убрать',()=>{parent.items.splice(parent.items.indexOf(node),1);draw();},'unlink'));
+    if(parent)head.append(removeButton('Убрать блок',()=>{parent.items.splice(parent.items.indexOf(node),1);draw();}));
     if(node.items){
       node.items.forEach((child,i)=>shell.append(slot(node,i),block(child,node)));
       shell.append(slot(node,node.items.length));
