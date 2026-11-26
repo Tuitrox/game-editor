@@ -232,8 +232,8 @@ function parameterFields(node){
 function ruleBoard(root,kind,event,draw){
   let dragging=null;
   function contains(node,target){return node===target || node.items?.some(child=>contains(child,target));}
-  function addLeaf(parent){
-    const caption=kind==='causes'?'Выбрать событие-причину':'Выбрать условие';
+  function addLeaf(parent,leafType){
+    const caption={event:'Выбрать событие-причину',state:'Выбрать состояние',parameter:'Выбрать параметр'}[leafType];
     function insert(child){
       parent.items.push(child);draw();
     }
@@ -245,28 +245,33 @@ function ruleBoard(root,kind,event,draw){
       board.querySelector('.slot-chooser')?.remove();
       const panel=el('div',{class:'slot-chooser'});
       e.currentTarget.parentElement.after(panel);
-      if(kind==='causes'){
+      if(leafType==='event'){
         panel.append(eventPicker(caption,id=>insert({op:'event',neg:false,ref:id}),()=>true,true));
+      }else if(leafType==='parameter'){
+        if(event.scope==='local'){
+          const params=entries(p.entities[event.owner].parameters || {});
+          panel.append(el('small',{},ownerLabel(event.owner,event.ownerPath)));
+          if(params.length)panel.append(...params.map(([id,param])=>
+            btn(param.name,()=>insertParameter(event.owner,id,event.ownerPath),'choice')));
+          else panel.append(el('p',{class:'empty'},'У этой сущности пока нет параметров. Добавьте параметр на её холсте во вкладке «Сущности».'));
+        }else if(Object.values(p.entities).some(entity=>Object.keys(entity.parameters || {}).length)){
+          panel.append(visualTree(caption,{multiple:false,parameterMode:true,eligible:()=>false,open:true,
+            apply:(route,id)=>insertParameter(route.at(-1),id,route)}));
+        }else panel.append(el('p',{class:'empty'},'В проекте пока нет параметров. Добавьте параметр нужной сущности во вкладке «Сущности».'));
       }else if(event.scope==='local'){
         const pick=ref=>insert({op:'self',neg:false,refs:ref?[ref]:[],paths:ref?[event.ownerPath]:[]});
         panel.append(el('small',{},ownerLabel(event.owner,event.ownerPath)),
           btn('Любое состояние',()=>pick(null),'choice'),
           ...statesOf(event.owner).map(([id,s])=>btn(s.name,()=>pick(id),'choice')));
-        const params=entries(p.entities[event.owner].parameters || {});
-        if(params.length)panel.append(el('strong',{},'Параметры'),...params.map(([id,param])=>
-          btn(param.name,()=>insertParameter(event.owner,id,event.ownerPath),'choice')));
       }else{
         const mode=selector([['all','Все из'],['any','Любой из']],'all',()=>{});
-        const pickParameter=btn('Выбрать параметр',()=>panel.replaceChildren(visualTree('Выбрать параметр',{
-          multiple:false,parameterMode:true,eligible:()=>false,open:true,
-          apply:(route,id)=>insertParameter(route.at(-1),id,route)})));
-        panel.append(pickParameter,mode,visualTree(caption,{open:true,eligible:r=>statesOf(r.at(-1)).length>0,
+        panel.append(mode,visualTree(caption,{open:true,eligible:r=>statesOf(r.at(-1)).length>0,
           apply:routes=>{
             if(!routes.length)return notice('Выберите сущность для проверки.');
             insert({op:mode.value,neg:false,refs:routes.map(()=>''),paths:routes});
           }}));
       }
-    }},kind==='causes'?'+ Событие':'+ Условие');
+    }},{event:'+ Событие',state:'+ Состояние',parameter:'+ Параметр'}[leafType]);
   }
   function slot(parent,index){
     const zone=el('div',{class:'rule-slot drop-only'});
@@ -318,7 +323,8 @@ function ruleBoard(root,kind,event,draw){
       shell.append(slot(node,node.items.length));
       if(node.op==='not' && node.items.length)return shell;
       const append=child=>{node.items.push(child);draw();};
-      shell.append(el('div',{class:'addrow'},addLeaf(node),...['and','or','not'].map(op=>btn('+ '+words[op],()=>append({op,neg:false,items:[]})))));
+      const leafTypes=kind==='causes'?['event']:['state','parameter'];
+      shell.append(el('div',{class:'addrow'},...leafTypes.map(type=>addLeaf(node,type)),...['and','or','not'].map(op=>btn('+ '+words[op],()=>append({op,neg:false,items:[]})))));
     }else if(kind==='causes'){
       shell.append(el('p',{class:'rule-ref ref-event'},fullEvent(node.ref)),eventPicker('Сменить событие',id=>{node.ref=id;draw();}));
     }else if(node.op==='parameter')shell.append(parameterFields(node));
