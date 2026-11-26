@@ -188,6 +188,26 @@ button.rule-ref:hover{text-decoration:underline}
 .entity-row .tree-section:hover,.entity-row .tree-action:hover{background:#e3ebe2}
 .tree-attach{font-size:12px}.entity-row.drop-target,#board.entity-map.drop-target{outline:2px dashed #487553;outline-offset:-2px}
 .tree-empty{margin:0;padding:20px;color:#53695b}
+#board.states-overview{background:#f4f7f7;padding:clamp(12px,2vw,28px);box-sizing:border-box}
+.state-list{max-width:980px;display:grid;gap:12px}
+.state-group{border:1px solid #c9d5d7;border-radius:10px;background:white;min-width:0}
+.state-group-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 15px;color:#254449}
+.state-group-head h3,.state-rules h4,.state-expanded p{margin:0}
+.state-group-head h3{font-size:16px}.state-group-head small,.state-record summary small,.state-none,.state-empty{color:#5e7071;font-size:12px}
+.state-group-head small{display:block;margin-top:3px}
+.state-add{flex:none;font-size:17px;line-height:1;padding:4px 7px}
+.state-empty{margin:0;padding:0 15px 12px}
+.state-record{margin:0;border:0;border-top:1px solid #dde5e6;padding:0}
+.state-record>summary,.state-empty-owners>summary{padding:9px 15px;cursor:pointer}
+.state-record>summary{color:#305863;font-size:14px}
+.state-record summary small{margin-left:12px}.state-record>summary:hover{background:#f1f6f6}
+.state-expanded{display:grid;gap:12px;padding:2px 16px 14px 30px;overflow-wrap:anywhere}
+.state-expanded>p{font-size:13px;white-space:pre-wrap}.state-expanded>.link{justify-self:start}
+.state-rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));gap:14px}
+.state-rules section{display:flex;align-content:flex-start;align-items:flex-start;flex-wrap:wrap;gap:5px}
+.state-rules h4{width:100%;font-size:13px;color:#4d6063;margin-bottom:3px}
+.state-form-slot:not(:empty){padding:0 15px 12px;max-width:520px}
+.state-empty-owners{padding:0;border:0;background:transparent}.state-empty-owners>.state-group{margin-top:8px}
 .entity-draft{display:grid;gap:8px;max-width:500px;margin:0 0 12px;padding:12px 14px;background:white;color:#254238;border:1px solid #bccdbc;border-radius:8px}
 .entity-tree .entity-draft{margin:0 10px 10px 38px}
 .entity-draft .field,.entity-draft .footer{margin:0}
