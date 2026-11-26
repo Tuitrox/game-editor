@@ -1,0 +1,12 @@
+name: voyage-game-editor
+services:
+  editor:
+    build: .
+    ports:
+      - "127.0.0.1:${EDITOR_PORT:-8787}:8080"
+    volumes:
+      - project_data:/data
+    restart: unless-stopped
+volumes:
+  project_data:
+

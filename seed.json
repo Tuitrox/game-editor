@@ -1,0 +1,203 @@
+{
+  "entities": {
+    "root": {
+      "name": "Рейс не по плану",
+      "desc": "Кооперативная игра о грузовом рейсе и работе экипажа.",
+      "children": [
+        "world",
+        "ui"
+      ]
+    },
+    "world": {
+      "name": "Игровой мир",
+      "desc": "Корабль, портовые сооружения и системы игрового мира.",
+      "children": [
+        "ship",
+        "pier"
+      ]
+    },
+    "ui": {
+      "name": "Интерфейс",
+      "desc": "Экраны, приборы и сигналы для экипажа.",
+      "children": [
+        "alarm"
+      ]
+    },
+    "ship": {
+      "name": "Грузовой корабль",
+      "desc": "Бортовые системы и помещения.",
+      "children": [
+        "engine",
+        "power",
+        "pump"
+      ]
+    },
+    "pier": {
+      "name": "Причал",
+      "desc": "Место погрузки и отправления судна.",
+      "children": []
+    },
+    "engine": {
+      "name": "Машинное отделение",
+      "desc": "Оборудование нижней палубы.",
+      "children": [
+        "gen"
+      ]
+    },
+    "power": {
+      "name": "Электросистема",
+      "desc": "Выработка и распределение питания.",
+      "children": [
+        "gen",
+        "panel"
+      ]
+    },
+    "gen": {
+      "name": "Генератор",
+      "desc": "Питает судовую сеть.",
+      "children": []
+    },
+    "panel": {
+      "name": "Распределительный щит",
+      "desc": "Подаёт питание на оборудование.",
+      "children": []
+    },
+    "pump": {
+      "name": "Осушительный насос",
+      "desc": "Откачивает воду из отсека.",
+      "children": []
+    },
+    "alarm": {
+      "name": "Аварийная индикация",
+      "desc": "Показывает потерю питания на мостике.",
+      "children": []
+    }
+  },
+  "states": {
+    "on": {
+      "name": "Работает",
+      "owner": "gen",
+      "desc": ""
+    },
+    "off": {
+      "name": "Выключен",
+      "owner": "gen",
+      "desc": ""
+    },
+    "broken": {
+      "name": "Разрушен",
+      "owner": "gen",
+      "desc": ""
+    },
+    "live": {
+      "name": "Под напряжением",
+      "owner": "panel",
+      "desc": ""
+    },
+    "dead": {
+      "name": "Обесточен",
+      "owner": "panel",
+      "desc": ""
+    },
+    "idle": {
+      "name": "Остановлен",
+      "owner": "pump",
+      "desc": ""
+    },
+    "pumping": {
+      "name": "Качает",
+      "owner": "pump",
+      "desc": ""
+    },
+    "lit": {
+      "name": "Горит",
+      "owner": "alarm",
+      "desc": ""
+    }
+  },
+  "events": {
+    "trip": {
+      "name": "Аварийный останов",
+      "desc": "Защита останавливает генератор.",
+      "owner": "gen",
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": [
+          {
+            "op": "any",
+            "neg": false,
+            "refs": [
+              "on"
+            ]
+          }
+        ]
+      },
+      "causes": {
+        "op": "and",
+        "neg": false,
+        "items": []
+      },
+      "effects": [
+        "off"
+      ]
+    },
+    "loss": {
+      "name": "Потеря питания",
+      "desc": "Щит отключает линию.",
+      "owner": "panel",
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": []
+      },
+      "causes": {
+        "op": "and",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "trip"
+          }
+        ]
+      },
+      "effects": [
+        "dead",
+        "lit"
+      ]
+    },
+    "halt": {
+      "name": "Остановка насоса",
+      "desc": "Насос останавливается при отключении линии.",
+      "owner": "pump",
+      "conditions": {
+        "op": "and",
+        "neg": false,
+        "items": [
+          {
+            "op": "any",
+            "neg": false,
+            "refs": [
+              "dead"
+            ]
+          }
+        ]
+      },
+      "causes": {
+        "op": "and",
+        "neg": false,
+        "items": [
+          {
+            "op": "event",
+            "neg": false,
+            "ref": "loss"
+          }
+        ]
+      },
+      "effects": [
+        "idle"
+      ]
+    }
+  }
+}
