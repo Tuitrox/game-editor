@@ -33,14 +33,19 @@ function graphLayout(project) {
 let clipboardDrag=null, loadSequence=0;
 const gridStep=5;
 const expandedPaths=new Set();
+const narrowScope=matchMedia('(max-width: 1000px)');
+let scopeOpen=!narrowScope.matches;
 const here = () => path.at(-1);
+let lastBranch=null;
 export function descendants(id) {
+  if(lastBranch?.project===p && lastBranch.id===id)return lastBranch.members;
   const seen = new Set(), queue = [id];
   for (const key of queue) {
     if (seen.has(key)) continue;
     seen.add(key);
     queue.push(...p.entities[key].children);
   }
+  lastBranch={project:p,id,members:seen};
   return seen;
 }
 function pathTo(id,start=null) {
@@ -65,7 +70,7 @@ function currentView() {
   const canvas=$('#content');
   return {path:[...path],tab,stateCanvas,selectedNode,search:$('#search').value,
     expanded:[...expandedPaths],scroll:[canvas.scrollLeft,canvas.scrollTop],
-    event:$('dialog').open?$('#modal').dataset.event:null};
+    scopeQuery:$('#scopeSearch').value,event:$('dialog').open?$('#modal').dataset.event:null};
 }
 function validView(view){
   return view.path.every((id,i)=>Object.hasOwn(p.entities,id) &&
@@ -77,6 +82,7 @@ function go(id,route,viewTab=tab,state=null) {
   if(path.join('/')===nextPath.join('/') && tab===viewTab && stateCanvas===state)return;
   backStack.push(currentView());
   path=nextPath;tab=viewTab;stateCanvas=state;
+  for(let i=1;i<path.length;i++)expandedPaths.add('scope:'+path.slice(0,i).join('/'));
   selectedNode=null;picked=null;entityDraft=null;$('#search').value='';
   if ($('dialog').open) $('dialog').close();
   document.body.classList.remove('openpool');
@@ -90,6 +96,7 @@ function goBack(){
     selectedNode=previous.selectedNode;picked=null;entityDraft=null;
     expandedPaths.clear();for(const key of previous.expanded)expandedPaths.add(key);
     $('#search').value=previous.search;
+    $('#scopeSearch').value=previous.scopeQuery;
     if($('dialog').open)$('dialog').close();
     render();$('#content').scrollTo(...previous.scroll);
     if(previous.event && p.events[previous.event])eventDetail(previous.event);
@@ -367,8 +374,8 @@ function renderPool() {
   const needle=$('#search').value.trim().toLocaleLowerCase();
   const rows=[], scope=descendants(here());
   for(const [id,obj] of entries(p[tab])) {
-    if(tab==='entities' ? id==='root' : !scope.has(obj.owner))continue;
-    if(tab==='events' && !eventInBranch(obj,path))continue;
+    if(tab==='entities' ? id==='root' : here()!=='root' && !scope.has(obj.owner))continue;
+    if(tab==='events' && here()!=='root' && !eventInBranch(obj,path))continue;
     if(!obj.name.toLocaleLowerCase().includes(needle))continue;
     const b=btn(obj.name,()=>tab==='entities'?choose(id):tab==='states'?stateDetail(id):eventDetail(id),'poolitem');
     b.prepend(el('span',{class:'symbol'},tab==='entities'?'◇':tab==='states'?'◉':'↯'));
@@ -471,6 +478,8 @@ function addObject(owner=here(),host=null) {
   if(tab==='entities')return beginEntity();
   const group=host || $('#board .state-group');
   if(!group)return;
+  const ownerToggle=group.querySelector('.state-owner-toggle');
+  if(ownerToggle.getAttribute('aria-expanded')==='false')ownerToggle.click();
   editCardFields(group.querySelector('.state-form-slot'),'states',null,'name',owner);
 }
 function openStateCanvas(id,ownerRoute){
@@ -614,25 +623,44 @@ function stateOverview(board){
   board.style.width='100%';board.style.height='auto';board.replaceChildren();
   const list=el('div',{class:'state-list'});board.append(list);
   const placements=new Map();
-  for(const route of entityRoutes(p,path)){
+  for(const route of entityRoutes(p,here()==='root'?null:path)){
     const owner=route.at(-1);
     if(!placements.has(owner))placements.set(owner,[]);
     placements.get(owner).push(route);
   }
   const emptyOwners=el('details',{class:'state-empty-owners'});
   let emptyCount=0;
-  for(const [owner,routes] of placements){
+  // Keep the current owner's group first for the toolbar and pool add buttons.
+  for(const owner of [here(),...Array.from(placements.keys()).filter(id=>id!==here())]){
+    const routes=placements.get(owner);
     const entity=p.entities[owner],route=routes[0],key=route.join('/');
     const group=el('section',{class:'state-group'});group.dataset.route=key;
     const add=btn('＋',()=>addObject(owner,group),'state-add');
     add.title='Добавить состояние в «'+entity.name+'»';add.setAttribute('aria-label',add.title);
-    const label=el('div',{},el('h3',{},entity.name));
+    const states=owners.get(owner) || [];
+    const toggle=btn('',()=>setOpen(body.hidden),'state-owner-toggle');
+    const arrow=el('span',{ariaHidden:'true'}),count=el('span',{class:'owner-count'},String(states.length));
+    count.title='Количество состояний';
+    toggle.append(arrow,entity.name,count);
+    const label=el('div',{},el('h3',{},toggle));
     if(routes.length>1)label.append(el('small',{},routes.map(r=>pathLabel(p,r.slice(path.length-1,-1))).join(' · ')));
     else if(route.length>path.length+1)label.append(el('small',{},pathLabel(p,route.slice(path.length,-1))));
-    group.append(el('div',{class:'state-group-head'},label,add),el('div',{class:'state-form-slot'}));
-    const states=owners.get(owner) || [];
-    if(!states.length)group.append(el('p',{class:'state-empty'},'Пока нет состояний'));
-    for(const [id,state] of states){
+    const body=el('div',{class:'state-group-body'});
+    const head=el('div',{class:'state-group-head'},label,add);
+    head.onclick=e=>{if(!e.target.closest('button'))toggle.click();};
+    group.append(head,body);
+    const expandedKey='owner:'+path.join('/')+':'+owner;
+    const defaultOpen=owner===here();
+    function setOpen(open){
+      if(open===defaultOpen)expandedPaths.delete(expandedKey);else expandedPaths.add(expandedKey);
+      toggle.setAttribute('aria-expanded',String(open));
+      arrow.textContent=open?'▾':'▸';body.hidden=!open;
+      if(!open || body.childElementCount)return;
+      body.append(el('div',{class:'state-form-slot'}));
+      if(!states.length)body.append(el('p',{class:'state-empty'},'Пока нет состояний'));
+      for(const [id,state] of states)body.append(stateRow(id,state));
+    }
+    function stateRow(id,state){
       const links=linksForState(index,id,routes);
       const recordKey='state:'+key+':'+id,details=el('details',{class:'state-record',open:expandedPaths.has(recordKey)});
       details.dataset.state=id;
@@ -645,8 +673,9 @@ function stateOverview(board){
       const open=routes.map(r=>btn(routes.length===1?'Открыть состояние ↗':pathLabel(p,r)+' ↗',
         ()=>openStateCanvas(id,r),'link'));
       details.append(summary,el('div',{class:'state-expanded'},state.desc?el('p',{},state.desc):null,stateRules(links),open));
-      group.append(details);
+      return details;
     }
+    setOpen(defaultOpen!==expandedPaths.has(expandedKey));
     if(states.length || owner===here())list.append(group);
     else {emptyOwners.append(group);emptyCount++;}
   }
@@ -722,7 +751,63 @@ function renderEventBoard(board){
   board.onclick=e=>{if(e.target===board)highlight(null);};
   highlight(cards.has(selectedNode)?selectedNode:null);
 }
+const foldedMatches=new Set();
+function scopeTree(){
+  const query=$('#scopeSearch').value.trim().toLocaleLowerCase();
+  const parents=new Map(),visible=new Set();
+  for(const [id,entity] of entries(p.entities)){
+    for(const child of entity.children){
+      if(!parents.has(child))parents.set(child,[]);
+      parents.get(child).push(id);
+    }
+    if(query && entity.name.toLocaleLowerCase().includes(query))visible.add(id);
+  }
+  // Keep ancestors of matches. Shared entities can have several routes.
+  for(const id of visible)for(const parent of parents.get(id) || [])visible.add(parent);
+  const tree=$('#scopeTree'), active=path.join('/');
+  function branch(route){
+    const id=route.at(-1),entity=p.entities[id],key=route.join('/');
+    const children=query?entity.children.filter(child=>visible.has(child)):entity.children;
+    const open=query?!foldedMatches.has(key):expandedPaths.has('scope:'+key);
+    const row=el('div',{class:'scope-row'}),item=el('li',{},row);
+    row.dataset.route=key;
+    if(children.length){
+      const toggle=btn(open?'▾':'▸',()=>{
+        if(query){if(open)foldedMatches.add(key);else foldedMatches.delete(key);}
+        else if(open)expandedPaths.delete('scope:'+key);
+        else expandedPaths.add('scope:'+key);
+        scopeTree();
+        tree.querySelector('[data-route="'+CSS.escape(key)+'"] .scope-fold')?.focus({preventScroll:true});
+      },'scope-fold');
+      toggle.setAttribute('aria-expanded',String(open));
+      toggle.setAttribute('aria-label',(open?'Свернуть ':'Раскрыть ')+entity.name);row.append(toggle);
+    }else row.append(el('span',{class:'scope-space'}));
+    const select=btn(entity.name,()=>{
+      if(narrowScope.matches)scopeOpen=false;
+      if(key!==active || stateCanvas)go(id,route);
+      else renderScope();
+      if(scopeOpen)tree.querySelector('[aria-current="true"]')?.focus({preventScroll:true});
+      else $('#scopeToggle').focus();
+    },'scope-name');
+    if(key===active)select.setAttribute('aria-current','true');
+    select.title=pathLabel(p,route);row.append(select);
+    if(open && children.length)item.append(el('ul',{},children.map(child=>branch([...route,child]))));
+    return item;
+  }
+  const roots=['root',...Object.keys(p.entities).filter(id=>id!=='root' && !parents.has(id))];
+  const results=roots.filter(id=>!query || visible.has(id));
+  tree.replaceChildren(results.length?el('ul',{},results.map(id=>branch([id]))):el('p',{class:'state-empty'},'Ничего не найдено'));
+}
+function renderScope(){
+  const available=tab==='states' || tab==='events',open=available && scopeOpen;
+  $('#scopeToggle').hidden=!available;
+  $('#scopeToggle').setAttribute('aria-expanded',String(open));
+  $('#scopePanel').hidden=!open;
+  $('#studio').classList.toggle('with-scope',open);
+  if(open)scopeTree();
+}
 function render() {
+  renderScope();
   $('#board').onclick=null;
   $('#board').classList.toggle('entity-map',tab==='entities');
   $('#board').classList.toggle('states-overview',tab==='states' && !stateCanvas);
@@ -811,7 +896,8 @@ function newProject(){
 async function route(){
   wires?.dispose();wires=null;
   const ticket=++loadSequence, id=location.hash.match(/^#project\/([1-9]\d*)$/)?.[1];
-  expandedPaths.clear();backStack.length=0;undoStack.length=0;entityDraft=null;
+  expandedPaths.clear();expandedPaths.add('scope:root');foldedMatches.clear();$('#scopeSearch').value='';
+  backStack.length=0;undoStack.length=0;entityDraft=null;
   if($('dialog').open)$('dialog').close();
   document.body.classList.remove('openpool');
   stateCanvas=null;$('#home').hidden=!id;$('#studio').hidden=true;$('#poolToggle').hidden=true;$('#library').hidden=Boolean(id);
@@ -824,7 +910,7 @@ async function route(){
       render();$('#status').textContent='Сохранено';
     }else{
       const {projects}=await request('/api/projects');if(ticket!==loadSequence)return;
-      projectId=null;p=null;$('#status').textContent='';
+      projectId=null;p=null;lastBranch=null;$('#status').textContent='';
       $('#projects').replaceChildren(...(projects.length?projects.map(projectCard):[el('p',{class:'shelfempty'},'Здесь появятся ваши проекты.')]));
     }
   }catch(err){if(ticket!==loadSequence)return;$('#status').textContent='Ошибка загрузки';notice(err.message);$('#library').hidden=false;$('#projects').replaceChildren(btn('Вернуться к проектам',home));}
@@ -843,7 +929,17 @@ importInput.onchange=async()=>{
   finally{button.disabled=false;}
 };
 $('#home').onclick=home;$('#newProject').onclick=newProject;
-$('#poolToggle').onclick=()=>document.body.classList.toggle('openpool');
+$('#scopeToggle').onclick=()=>{
+  scopeOpen=!scopeOpen;document.body.classList.remove('openpool');renderScope();
+  if(scopeOpen)$('#scopeSearch').focus();
+};
+$('#scopeClose').onclick=()=>{scopeOpen=false;renderScope();$('#scopeToggle').focus();};
+$('#scopeSearch').oninput=()=>{foldedMatches.clear();scopeTree();};
+narrowScope.addEventListener('change',()=>{scopeOpen=!narrowScope.matches;if(p)renderScope();});
+$('#poolToggle').onclick=()=>{
+  if(narrowScope.matches && scopeOpen){scopeOpen=false;renderScope();}
+  document.body.classList.toggle('openpool');
+};
 $('#createPool').onclick=()=>addObject();
 $('#search').oninput=renderPool;$('#edit').onclick=()=>stateCanvas?editCardFields($('.context>div'),'states',stateCanvas):editEntity(here());
 

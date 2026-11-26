@@ -191,10 +191,34 @@ button.rule-ref:hover{text-decoration:underline}
 #board.states-overview{background:#f4f7f7;padding:clamp(12px,2vw,28px);box-sizing:border-box}
 .state-list{max-width:980px;display:grid;gap:12px}
 .state-group{border:1px solid #c9d5d7;border-radius:10px;background:white;min-width:0}
-.state-group-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 15px;color:#254449}
+.state-group-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 15px;color:#254449;cursor:pointer}
 .state-group-head h3,.state-rules h4,.state-expanded p{margin:0}
 .state-group-head h3{font-size:16px}.state-group-head small,.state-record summary small,.state-none,.state-empty{color:#5e7071;font-size:12px}
 .state-group-head small{display:block;margin-top:3px}
+.state-group-head .state-owner-toggle{display:inline-flex;align-items:center;gap:8px;padding:2px 0;border:0;background:transparent;color:inherit;font:inherit;text-align:left}
+.owner-count{font-size:12px;font-weight:500;color:#50665e;background:#edf2ed;border-radius:5px;padding:2px 6px}
+#studio.with-scope{grid-template-columns:235px minmax(0,1fr) clamp(210px,19vw,320px)}
+#scopePanel{display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;padding:16px 12px;background:#f8faf6;border-left:1px solid var(--line);overflow:hidden}
+#scopePanel[hidden],#scopeToggle[hidden]{display:none}
+.scope-head{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.scope-head h2{margin:0;font-size:16px;color:#28473b}
+#scopeClose{font-size:17px;padding:0 7px}
+#scopeSearch{width:100%;min-width:0}
+#scopeTree{min-height:0;overflow:auto}
+#scopeTree ul{list-style:none;margin:0;padding:0}
+#scopeTree ul ul{margin-left:10px;padding-left:5px;border-left:1px solid #ccdacd}
+.scope-row{display:flex;align-items:center;gap:3px;padding:1px 0}
+.scope-fold,.scope-space{flex:0 0 22px}
+.scope-fold,.scope-name{border:0;background:transparent;color:#314f42}
+.scope-fold{padding:4px 0}
+.scope-name{flex:1;min-width:0;text-align:left;font-size:13px;padding:5px;overflow-wrap:anywhere}
+.scope-name[aria-current=true]{background:#dcebdd;color:#173f2d;font-weight:650}
+#scopeToggle{font-size:13px;padding:4px 9px}
+@media(max-width:1000px){
+  #studio.with-scope{position:relative;grid-template-columns:235px minmax(0,1fr)}
+  #scopePanel{position:absolute;z-index:6;right:0;top:0;bottom:0;width:min(300px,84%);box-shadow:-5px 0 18px #263d2c20}
+}
+@media(max-width:760px){#studio.with-scope{grid-template-columns:minmax(0,1fr)}}
 .state-add{flex:none;font-size:17px;line-height:1;padding:4px 7px}
 .state-empty{margin:0;padding:0 15px 12px}
 .state-record{margin:0;border:0;border-top:1px solid #dde5e6;padding:0}
