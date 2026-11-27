@@ -1,4 +1,4 @@
-import {p,el,btn,option,label,entries,uid,modal,fields,footer,save,deleteObj,outbound,eventDetail,stateDetail,notice,currentOwnerPath} from './app.js';
+import {p,el,btn,option,label,entries,uid,modal,fields,footer,save,deleteObj,outbound,eventDetail,stateDetail,notice,currentOwnerPath,pickerRoots,openBasis} from './app.js';
 
 import {pathLabel} from './routes.js';
 import {parameterTypes, parameterTest, comparisons, changeDirections, changeText} from './parameters.js';
@@ -39,7 +39,7 @@ function eventPicker(caption,onPick,allowed=()=>true,open=false){
     apply:(_route,id)=>onPick(id)});
 }
 function statesOf(owner){return entries(p.states).filter(([,s])=>s.owner===owner);}
-function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=false,parameterMode=false,eventFilter=null,open=false}){
+function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=false,parameterMode=false,eventFilter=null,open=false,branchPath=null}){
   const wrap=el('div',{class:'visual-picker'});
   const launch=btn(caption,()=>{
     if(wrap.querySelector('.tree-panel'))return;
@@ -95,9 +95,8 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
       }else line.append(el('span',{class:'toggle-space'}));
       line.append(row);return el('li',{},line,contents);
     }
-    const nested=new Set(Object.values(p.entities).flatMap(e=>e.children));
-    const roots=Object.keys(p.entities).filter(id=>!nested.has(id));
-    const tree=el('ul',{class:'project-tree'},roots.map(id=>branch([id])));
+    const roots=branchPath?[branchPath]:pickerRoots();
+    const tree=el('ul',{class:'project-tree'},roots.map(route=>branch(route)));
     if(parameterMode==='number' && !tree.querySelector('.tree-state')){
       wrap.replaceChildren(el('p',{class:'empty'},'В проекте пока нет числовых параметров. Добавьте параметр типа «Число» на холсте сущности.'));
       return;
@@ -145,23 +144,28 @@ function conditionMembers(node){
   }
   return members;
 }
-function conditionFields(node,draw){
+function conditionFields(node,draw,branchPath){
   const refs=node.refs, paths=node.paths??=refs.map(()=>null);
   const ownerAt=i=>paths[i]?.at(-1) ?? p.states[refs[i]].owner;
   const group=el('div',{class:'condition-members'});
   const members=conditionMembers(node);
   const sameOwner=members.length>0 && members.every(m=>m.owner===members[0].owner && m.place);
-  const mixedStates=new Set(members.map(m=>m.state)).size>1;
   if(sameOwner)group.append(el('strong',{},members[0].name));
   const chips=el('div',{class:'member-chips'});
   members.forEach((m,i)=>{
     const place=sameOwner?m.place:[m.place,m.name].filter(Boolean).join(' › ');
     const title=ownerLabel(m.owner,m.route);
-    chips.append(el('span',{class:'member-chip',title},place+(mixedStates?' → '+(m.state || 'Выберите состояние'):''),
-      removeButton('Убрать '+title,()=>{refs.splice(i,1);paths.splice(i,1);draw();})));
+    const chip=el('span',{class:'member-chip',title},place);
+    if(members.length>1){
+      const select=selector([['','Выберите состояние'],...statesOf(m.owner).map(([id,s])=>[id,s.name])],
+        refs[i],v=>{refs[i]=v;draw();});
+      select.ariaLabel='Состояние · '+title;chip.append(select);
+    }
+    chip.append(removeButton('Убрать '+title,()=>{refs.splice(i,1);paths.splice(i,1);draw();}));
+    chips.append(chip);
   });
   group.append(chips,visualTree(members.length?'Изменить выбор':'Выбрать сущности',{
-    initial:paths,eligible:route=>statesOf(route.at(-1)).length>0,
+    branchPath,initial:paths,eligible:route=>statesOf(route.at(-1)).length>0,
     apply:routes=>{
       const old=new Map(paths.map((route,i)=>[route?.join('/'),refs[i]]));
       const common=refs.length && refs.every(key=>p.states[key]?.name===p.states[refs[0]]?.name)?p.states[refs[0]]?.name:null;
@@ -181,8 +185,7 @@ function conditionFields(node,draw){
       if(v){node.refs=options.map(row=>row.find(([,s])=>s.name===v)[0]);draw();}
     });
     stateSelect.ariaLabel='Состояние для всей группы';
-    group.append(el('label',{class:'member-state'},'Состояние',stateSelect));
-    if(!names.length)group.append(el('small',{},'У выбранных сущностей нет общего названия состояния. Используйте отдельную проверку для другой группы.'));
+    if(names.length)group.append(el('label',{class:'member-state'},members.length>1?'Одно состояние для всех':'Состояние',stateSelect));
   }
   return group;
 }
@@ -308,14 +311,17 @@ function ruleBoard(root,kind,event,draw){
           const child={op:'parameter',neg:false};
           setParameter(child,owner,ref,path);insert(child);
         });
-      }else if(event.scope==='local'){
-        const pick=ref=>insert({op:'self',neg:false,refs:ref?[ref]:[],paths:ref?[event.ownerPath]:[]});
-        panel.append(el('small',{},ownerLabel(event.owner,event.ownerPath)),
-          btn('Любое состояние',()=>pick(null),'choice'),
-          ...statesOf(event.owner).map(([id,s])=>btn(s.name,()=>pick(id),'choice')));
       }else{
+        const local=event.scope==='local';
+        if(local){
+          const pick=ref=>insert({op:'self',neg:false,refs:ref?[ref]:[],paths:ref?[event.ownerPath]:[]});
+          panel.append(el('small',{},ownerLabel(event.owner,event.ownerPath)),
+            btn('Любое состояние',()=>pick(null),'choice'),
+            ...statesOf(event.owner).map(([id,s])=>btn(s.name,()=>pick(id),'choice')));
+          if(!p.entities[event.owner].children.length)return;
+        }
         const mode=selector([['all','Все из'],['any','Любой из']],'all',()=>{});
-        panel.append(mode,visualTree(caption,{open:true,eligible:r=>statesOf(r.at(-1)).length>0,
+        panel.append(mode,visualTree(caption,{branchPath:local?(event.ownerPath || [event.owner]):null,open:true,eligible:r=>statesOf(r.at(-1)).length>0,
           apply:routes=>{
             if(!routes.length)return notice('Выберите сущность для проверки.');
             insert({op:mode.value,neg:false,refs:routes.map(()=>''),paths:routes});
@@ -399,7 +405,7 @@ function ruleBoard(root,kind,event,draw){
       shell.append(el('p',{},ownerLabel(event.owner,event.ownerPath)),selector([['','Любое состояние'],...options],node.refs[0] || '',v=>{
         node.refs=v?[v]:[];node.paths=v?[event.ownerPath]:[];
       }));
-    }else shell.append(conditionFields(node,draw));
+    }else shell.append(conditionFields(node,draw,event.scope==='local'?(event.ownerPath || [event.owner]):null));
     return shell;
   }
   const board=el('div',{class:'logic-board'});
@@ -415,6 +421,7 @@ function ruleBoard(root,kind,event,draw){
 export function editEvent(owner,id=null,scope='local') {
   const inherited=Boolean(id && p.events[id].instanceId);
   while(id && p.events[id].instanceId){id=p.events[id].sourceId;owner=p.events[id].owner;}
+  if(inherited)openBasis(owner);
   const key=id || uid();
   const event=id?structuredClone(p.events[id]):{name:'',desc:'',owner,scope,ownerPath:scope==='local'?currentOwnerPath(owner):null,conditions:newGroup(),causes:newGroup(),effects:[]};
   event.effectPaths??=event.effects.map(()=>null);

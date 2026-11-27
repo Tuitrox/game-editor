@@ -12,6 +12,7 @@ BASE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("DATA_DIR", BASE / "data"))
 DB = DATA / "editor.sqlite3"
 ASSETS = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
+          "/placements.js": ("placements.js", "text/javascript"),
           "/instances.js": ("instances.js", "text/javascript"),
           "/branch-text.js": ("branch-text.js", "text/javascript"),
           "/parameters.js": ("parameters.js", "text/javascript"),
@@ -53,6 +54,17 @@ def validate(p):
                     source = collection[source]["sourceId"]
                     require(source in collection, "Неизвестная основа")
                 resolved.update(chain)
+    if p.get("placementVersion") == 2:
+        for entity in entities.values():
+            require(all(k in entities and entities[k].get("instanceOf") for k in entity["children"]),
+                    "В дереве можно размещать только экземпляры из пула")
+        for collection in (states, events):
+            for obj in collection.values():
+                basis = entities.get(obj["owner"], {}).get("instanceOf")
+                if basis:
+                    require(obj.get("instanceId") == obj["owner"] and
+                            collection.get(obj.get("sourceId"), {}).get("owner") == basis,
+                            "Содержимое экземпляра должно принадлежать его основе")
     visited, active = set(), set()
 
     def coordinates(positions, allowed):
@@ -207,11 +219,15 @@ def validate(p):
             require(paths_for(node, "paths", refs) == [event.get("ownerPath")] * len(refs),
                     "Неверное размещение источника")
         elif kind == "conditions" and op in ("all", "any"):
-            require(event.get("scope") != "local", "Группы сущностей доступны в глобальных событиях")
+
             refs = node["refs"]
             require(isinstance(refs, list) and refs and all(i in states for i in refs),
                     "Выберите сущности и состояние")
             paths = paths_for(node, "paths", refs)
+            if event.get("scope") == "local":
+                branch = event.get("ownerPath") or [event["owner"]]
+                require(all(path and path[:len(branch)] == branch for path in paths),
+                        "Выберите состояние источника события или его вложенной сущности")
             targets = {(states[key]["owner"], tuple(path or [])) for key, path in zip(refs, paths)}
             require(len(targets) == len(refs), "Повтор размещения в группе")
         else:
@@ -291,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
                 project = data.get("project", data)
             else:
                 root = {"name": data["name"], "desc": data["desc"], "children": [], "positions": {}}
-                project = {"entities": {"root": root}, "states": {}, "events": {}}
+                project = {"placementVersion": 2, "entities": {"root": root}, "states": {}, "events": {}}
             validate(project)
             with sqlite3.connect(DB) as db:
                 key = db.execute("INSERT INTO project(version,body) VALUES(1,?)",
@@ -333,10 +349,14 @@ class Handler(BaseHTTPRequestHandler):
                 row = db.execute("SELECT body FROM project WHERE id=? AND version=?", (key, packet["version"])).fetchone()
                 if not row:
                     return self.reply(409, {"error": "Проект изменился в другой вкладке. Обновите страницу."})
-                previous = json.loads(row[0])["events"]
+                old_project = json.loads(row[0])
+                modern = packet["project"].get("placementVersion") == 2
+                require(old_project.get("placementVersion") != 2 or modern, "Обновите страницу редактора")
+                migrating = modern and old_project.get("placementVersion") != 2
+                previous = old_project["events"]
                 for event_id, event in packet["project"]["events"].items():
                     old = previous.get(event_id)
-                    if old and old.get("scope") != "global":
+                    if old and not migrating and old.get("scope") != "global":
                         require(all(old.get(field) == event.get(field) for field in ("owner", "ownerPath", "scope")),
                                 "Источник привязанного события изменить нельзя")
                 result = db.execute("UPDATE project SET body=?, version=version+1 WHERE id=? AND version=?",

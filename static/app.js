@@ -4,7 +4,7 @@ import {projectGraph, layoutGraph, upstream} from './graph.js';
 import {wireLayer} from './wires.js';
 import {entityRoutes, pathLabel} from './routes.js';
 import {branchText} from './branch-text.js';
-import {refreshInstances} from './instances.js';
+import {syncPlacements,migratePlacements,forkPlacement} from './placements.js';
 import {parameterTypes, parameterTest, changeText} from './parameters.js';
 const $ = s => document.querySelector(s);
 export function el(tag, props = {}, ...kids) {
@@ -128,7 +128,7 @@ function topology(project) {
 }
 export async function save(next, after, {undo=false}={}) {
   if (busy) return;
-  try{refreshInstances(next,uid);}catch(err){notice(err.message);return;}
+  try{syncPlacements(next,uid);}catch(err){notice(err.message);return;}
   // Hand edits belong to this topology. Rebuild after nodes or logical links change.
   if (!undo && next.graphLayouts && topology(p)!==topology(next)) {
     const usedParameters=new Set(Object.values(next.events).flatMap(e=>parameterRefs(e).map(n=>'parameters:'+n.owner+':'+n.ref)));
@@ -193,25 +193,35 @@ const blank=msg=>el('p',{class:'empty'},msg);
 const count=(obj,id)=>entries(obj).filter(([,o])=>o.owner===id).length;
 function editEntity(id) {
   const draft={...p.entities[id]};
-  if(draft.instanceId)return openBasis(id);
+  if(draft.instanceOf || draft.instanceId)return openBasis(id);
   const form=el('form',{onsubmit:e=>{
     e.preventDefault();
     const next=structuredClone(p);
-    Object.assign(next.entities[id],{name:draft.name,desc:draft.desc});save(next);
-  }},...(draft.instanceOf?fields(draft).slice(0,1):fields(draft)),footer(id!=='root' && !draft.instanceOf?btn('Удалить из пула',()=>deleteObj('entities',id),'danger'):null,
+    Object.assign(next.entities[id],{name:draft.name,desc:draft.desc});
+    save(next);
+  }},...fields(draft),footer(id!=='root'?btn('Удалить из пула',()=>deleteObj('entities',id),'danger'):null,
     el('button',{type:'submit',class:'primary'},'Сохранить')));
-  modal(draft.instanceOf?'Название экземпляра':'Редактировать сущность',form);
+  modal('Редактировать сущность',form);
 }
 function basis(id){
   while(p.entities[id].instanceOf || p.entities[id].instanceId)id=p.entities[id].instanceOf || p.entities[id].sourceId;
   return id;
 }
-function openBasis(id){go(basis(id),null,tab);}
-function beginEntity(route=null){
-  if(route && basis(route.at(-1))!==route.at(-1))return notice('Состав общих частей меняется в основе. Нажмите «Открыть основу».');
-  const target=route?.join('/') ?? null;
-  if(!entityDraft || entityDraft.target!==target)entityDraft={target,name:'',desc:''};
-  if(route)expandedPaths.add(target);
+export function openBasis(id){go(basis(id),null,tab);}
+export function pickerRoots(){return path[0]==='root'?[['root']]:[[path[0]],['root']];}
+function forkForm(id){
+  const input=el('input',{value:p.entities[id].name,required:true});
+  modal('Создать отдельную основу',el('form',{onsubmit:e=>{
+    e.preventDefault();
+    if(!input.value.trim())return input.focus();
+    const next=structuredClone(p),source=forkPlacement(next,id,input.value,uid);
+    save(next,()=>go(source,[source],'entities'));
+  }},label('Название в пуле',input),el('p',{},'Правила и вложенные части копируются один раз. Экземпляр сохранит своё место и связи.'),
+  footer(el('button',{class:'primary',type:'submit'},'Создать отдельную основу'))));
+  input.select();
+}
+function beginEntity(){
+  if(entityDraft?.target!==null)entityDraft={target:null,name:'',desc:''};
   picked=null;render();$('.entity-draft input')?.focus();
 }
 function entityDraftForm(){
@@ -224,10 +234,9 @@ function entityDraftForm(){
     if(!draft.name.trim()){form.querySelector('input').focus();return;}
     const next=structuredClone(p),id=uid();
     next.entities[id]={name:draft.name.trim(),desc:draft.desc,children:[]};
-    if(draft.target)next.entities[draft.target.split('/').at(-1)].children.push(id);
     save(next,()=>{
       entityDraft=null;
-      if(!draft.target){picked=id;document.body.classList.remove('openpool');}
+      picked=id;document.body.classList.remove('openpool');
     });
   }},...fields(draft),footer(btn('Отмена',cancel),el('button',{type:'submit',class:'primary'},'Создать')));
   form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();cancel();}};
@@ -256,7 +265,7 @@ export function deleteObj(type,id) {
   save(next,()=>{if(type==='states' && stateCanvas===id)stateCanvas=null;if(type==='entities' && path.includes(id))path=['root'];});
 }
 const tabs={entities:'Сущности',states:'Состояния',events:'События'};
-const poolTitles={entities:'Пул сущностей',states:'Состояния раздела',events:'События раздела'};
+const poolTitles={entities:'Пул основ',states:'Состояния раздела',events:'События раздела'};
 function pointFor(event,offset=[0,0]){
   const rect=$('#board').getBoundingClientRect();
   return [event.clientX-rect.left-offset[0],event.clientY-rect.top-offset[1]]
@@ -264,32 +273,35 @@ function pointFor(event,offset=[0,0]){
 }
 function attachEntity(id,route) {
   if(busy || tab!=='entities' || !Object.hasOwn(p.entities,id))return;
-  const parentId=route.at(-1);
-  if(descendants(id).has(parentId))return notice('Такое вложение создаёт цикл.');
-  if(basis(parentId)!==parentId)return notice('Общий состав экземпляра меняется в основе.');
+  const parentId=route.at(-1),owner=basis(parentId);
+  if(id===owner || descendants(id).has(parentId))return notice('Такое вложение создаёт цикл.');
+
   const siblings=p.entities[parentId].children.map(key=>p.entities[key].name);
   let number=1;
   while(siblings.includes(p.entities[id].name+' '+number))number++;
   picked=null;
-  entityDraft={target:route.join('/'),source:id,name:p.entities[id].name+' '+number};
-  expandedPaths.add(route.join('/'));render();
+  const fromPlacement=owner!==parentId;
+  if(fromPlacement){go(owner,[owner],'entities');route=[owner];}
+  entityDraft={target:route.join('/'),source:id,fromPlacement,name:p.entities[id].name+' '+number};
+  expandedPaths.add(entityDraft.target);render();
   const input=$('.entity-draft input');input?.focus();input?.select();
 }
 function instanceForm(draft){
   const parent=draft.target.split('/').at(-1),source=p.entities[draft.source];
-  function commit(link){
-    if(busy || !draft.name.trim() && !link)return;
-    const next=structuredClone(p),id=link?draft.source:uid();
-    if(!link)next.entities[id]={instanceOf:draft.source,name:draft.name.trim(),desc:source.desc,children:[]};
+  function commit(){
+    if(busy || !draft.name.trim())return;
+    const next=structuredClone(p),id=uid();
+    next.entities[id]={instanceOf:draft.source,name:draft.name.trim(),desc:source.desc,children:[],slot:id};
     next.entities[parent].children.push(id);
-    save(next,()=>{entityDraft=null;});
+    save(next,finish);
   }
   const input=el('input',{value:draft.name,required:true,oninput:e=>draft.name=e.target.value});
-  const cancel=()=>{entityDraft=null;render();};
-  const form=el('form',{class:'entity-draft',onsubmit:e=>{e.preventDefault();commit(false);}},
+  function finish(){entityDraft=null;if(draft.fromPlacement)goBack();else render();}
+  const cancel=finish;
+  const form=el('form',{class:'entity-draft',onsubmit:e=>{e.preventDefault();commit();}},
     label('Название экземпляра · '+source.name,input),
-    footer(btn('Отмена',cancel),p.entities[parent].children.includes(draft.source)?null:
-      btn('Вложить саму сущность',()=>commit(true)),el('button',{type:'submit',class:'primary'},'Создать экземпляр')));
+    draft.fromPlacement?el('small',{},'Добавится в состав всех экземпляров основы «'+p.entities[basis(parent)].name+'»'):null,
+    footer(btn('Отмена',cancel),el('button',{type:'submit',class:'primary'},'Создать экземпляр')));
   form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();cancel();}};
   return form;
 }
@@ -420,7 +432,7 @@ function renderPool() {
   const needle=$('#search').value.trim().toLocaleLowerCase();
   const rows=[], scope=descendants(here());
   for(const [id,obj] of entries(p[tab])) {
-    if(tab==='entities' ? id==='root' || obj.instanceId || obj.instanceOf : here()!=='root' && !scope.has(obj.owner))continue;
+    if(tab==='entities' ? id==='root' || obj.privateBasis || obj.instanceId || obj.instanceOf : !scope.has(obj.owner))continue;
     if(tab==='events' && here()!=='root' && !eventInBranch(obj,path))continue;
     if(!obj.name.toLocaleLowerCase().includes(needle))continue;
     const b=btn(obj.name,()=>tab==='entities'?choose(id):tab==='states'?stateDetail(id):eventDetail(id),'poolitem');
@@ -428,7 +440,7 @@ function renderPool() {
     if(tab==='entities') {
       b.classList.toggle('picked',picked===id);
       b.draggable=true;b.ondragstart=e=>beginDrag(e,id);b.ondragend=clearPoolDrag;
-      const jump=btn('↗',()=>go(id),'jump');jump.title='Открыть '+obj.name;
+      const jump=btn('↗',()=>go(id),'jump');jump.title='Открыть основу '+obj.name;
       rows.push(el('div',{class:'poolrow'},b,jump));
     } else {
       b.title=p.entities[obj.owner].name;
@@ -533,6 +545,7 @@ function fieldButton(text,container,type,id,field,cls){
   button.dataset.field=field;return button;
 }
 function addObject(owner=here(),host=null) {
+  if(tab!=='entities' && basis(owner)!==owner){openBasis(owner);return addObject(basis(owner));}
   if(stateCanvas)go(owner,scopePath(owner));
   if(tab==='events')return editEvent(owner);
   if(tab==='entities')return beginEntity();
@@ -551,17 +564,17 @@ function drawActions() {
   if(tab==='entities') {
     if(picked)bar.append(el('span',{class:'placementbar'},'Куда вложить «'+p.entities[picked].name+'»?'),
       btn('В текущий раздел',()=>attachEntity(picked,path)),btn('Отмена',()=>{picked=null;render();}));
-    else if(basis(here())===here())bar.append(btn('＋ Вложенная сущность',()=>beginEntity(path),'primary'));
+    else bar.append(btn('Разместить из пула',()=>{document.body.classList.add('openpool');$('#search').focus();}));
     return;
   }
-  bar.append(btn(tab==='states'?'＋ Состояние':'＋ Событие',()=>addObject(),'primary'));
+  if(basis(here())===here())bar.append(btn(tab==='states'?'＋ Состояние':'＋ Событие',()=>addObject(),'primary'));
   if(tab==='events'){
     bar.append(btn('Глобальные события',globalEvents),btn('Связи систем',showRelations));
     const children=p.entities[here()].children;
     if(children.length){
       const choose=el('select',{ariaLabel:'Дочерняя сущность'},option('','Дочерняя сущность…'),...children.map(k=>option(k,p.entities[k].name)));
       bar.append(choose,btn('Открыть',()=>choose.value?go(choose.value,[...path,choose.value]):choose.focus()),
-        btn('＋ Событие внутри',()=>choose.value?addObject(choose.value):choose.focus()));
+        btn('＋ Событие в основе',()=>choose.value?addObject(choose.value):choose.focus()));
     }
   }
 
@@ -659,8 +672,7 @@ function entityMap(board){
         link.title='Открыть раздел «'+tabs[kind]+'» для «'+entity.name+'»';stats.append(link);
       }
       section('states',states);section('events',events);
-      const edit=btn('✎',()=>editEntity(id),'tree-action');
-      edit.title='Изменить '+entity.name;edit.setAttribute('aria-label',edit.title);
+
       const unlink=btn('×',()=>{
         const next=structuredClone(p),parent=next.entities[parentId];
         if(entity.instanceOf){
@@ -680,11 +692,8 @@ function entityMap(board){
         clearPlacement(parent,id);save(next);
       },'tree-action');
       unlink.title='Убрать из «'+p.entities[parentId].name+'»';unlink.setAttribute('aria-label',unlink.title);
-      const add=btn('＋',()=>beginEntity(route),'tree-action tree-add');
-      add.title='Создать внутри «'+entity.name+'»';add.setAttribute('aria-label',add.title);
       row.append(stats);
-      if(basis(id)===id)row.append(add);
-      if(!entity.instanceId)row.append(edit,unlink);
+      if(basis(parentId)===parentId)row.append(unlink);
     }
     item.append(row);
     if(entityDraft?.target===key)item.append(entityDraftForm());
@@ -754,7 +763,7 @@ function stateOverview(board){
   board.style.width='100%';board.style.height='auto';board.replaceChildren();
   const list=el('div',{class:'state-list'});board.append(list);
   const placements=new Map();
-  for(const route of entityRoutes(p,here()==='root'?null:path)){
+  for(const route of entityRoutes(p,path)){
     const owner=route.at(-1);
     if(!placements.has(owner))placements.set(owner,[]);
     placements.get(owner).push(route);
@@ -778,7 +787,7 @@ function stateOverview(board){
     if(routes.length>1)label.append(el('small',{},routes.map(r=>pathLabel(p,r.slice(path.length-1,-1).filter(k=>k!=='root'))).filter(Boolean).join(' · ')));
     else if(route.length>path.length+1)label.append(el('small',{},pathLabel(p,route.slice(path.length,-1))));
     const body=el('div',{class:'state-group-body'});
-    const head=el('div',{class:'state-group-head'},label,add);
+    const head=el('div',{class:'state-group-head'},label,basis(owner)===owner?add:null);
     head.onclick=e=>{if(!e.target.closest('button'))toggle.click();};
     group.append(head,body);
     const expandedKey='owner:'+path.join('/')+':'+owner;
@@ -828,7 +837,7 @@ function renderEventBoard(board){
   board.replaceChildren();
   if(!graph.nodes.length){
     board.style.width='100%'; board.style.height='100%';
-    board.append(el('div',{class:'boardhint'},'Двойной щелчок по холсту создаст событие.'));
+    board.append(el('div',{class:'boardhint'},basis(here())===here()?'Двойной щелчок по холсту создаст событие.':'У экземпляра пока нет событий. Откройте основу, чтобы добавить правило.'));
     return;
   }
   function highlight(key){
@@ -943,7 +952,7 @@ function scopeTree(){
     if(open && children.length)item.append(el('ul',{},children.map(child=>branch([...route,child]))));
     return item;
   }
-  const roots=['root',...Object.keys(p.entities).filter(id=>id!=='root' && !parents.has(id))];
+  const roots=['root'];
   const results=roots.filter(id=>!query || visible.has(id));
   tree.replaceChildren(results.length?el('ul',{},results.map(id=>branch([id]))):el('p',{class:'state-empty'},'Ничего не найдено'));
 }
@@ -967,7 +976,11 @@ function render() {
   const type=stateCanvas?'states':'entities', key=stateCanvas || id;
   const projectStates=tab==='states' && id==='root' && !stateCanvas;
   $('#title').replaceChildren(projectStates?'Состояния':fieldButton(current.name,header,type,key,'name','header-field'));
-  $('#description').replaceChildren(fieldButton(current.desc || 'Добавить описание',header,type,key,'desc','header-field'));
+  if(current.instanceOf || current.instanceId)$('#title').textContent=current.name;
+  $('#description').replaceChildren(current.instanceOf || current.instanceId?current.desc:fieldButton(current.desc || 'Добавить описание',header,type,key,'desc','header-field'));
+  $('#edit').hidden=Boolean(current.instanceOf || current.instanceId);
+  $('#createPool').hidden=tab!=='entities' && basis(id)!==id;
+
   $('#topproject').textContent=tab==='states'?'':p.entities.root.name;
   $('#crumbs').replaceChildren(...path.flatMap((key,i)=>[...(i?[' / ']:[]),btn(tab==='states' && key==='root'?'Проект':p.entities[key].name,()=>go(key,path.slice(0,i+1)),'crumb')]));
   if(stateCanvas)$('#crumbs').append(' / ',current.name);
@@ -995,6 +1008,7 @@ function render() {
     else renderEventBoard(board);
   }
   $('#actions').append(el('button',{type:'button',id:'exportText',onclick:showBranchText,title:'Показать текст выбранной ветки'},'В текст'));
+  if(basis(id)!==id && !stateCanvas)$('#actions').append(btn('Создать отдельную основу',()=>forkForm(id)));
   if(basis(id)!==id)$('#actions').prepend(btn('Открыть основу · '+p.entities[basis(id)].name,()=>openBasis(id)));
   renderPool();
 }
@@ -1072,7 +1086,16 @@ async function route(){
   $('#topproject').textContent='';$('#status').textContent='Загрузка…';
   try {
     if(id){
-      const data=await request('/api/projects/'+id);if(ticket!==loadSequence)return;
+      let data=await request('/api/projects/'+id);if(ticket!==loadSequence)return;
+      if(data.project.placementVersion!==2){
+        const updated=migratePlacements(data.project,uid);
+        const r=await fetch('/api/projects/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({version:data.version,project:updated})});
+        if(!r.ok && r.status!==409)throw Error((await r.json()).error);
+        data=await request('/api/projects/'+id);
+        if(ticket!==loadSequence)return;
+        if(data.project.placementVersion!==2)throw Error('Проект изменился во время обновления. Откройте его ещё раз.');
+      }
       selectedNode=null;projectId=data.id;p=data.project;version=data.version;path=['root'];tab='entities';picked=null;clipboardDrag=null;
       $('#search').value='';$('#studio').hidden=false;$('#poolToggle').hidden=false;$('#content').scrollTo(0,0);
       render();$('#status').textContent='Сохранено';
@@ -1132,7 +1155,7 @@ board.ondrop=e=>{
   clearPoolDrag();
   if(drag && drag.owner===here() && drag.project===projectId)attachEntity(drag.id,route);
 };
-board.ondblclick=e=>{if(e.target===board && tab==='events')addObject();};
+board.ondblclick=e=>{if(e.target===board && tab==='events' && basis(here())===here())addObject();};
 document.addEventListener('keydown',e=>{if(e.key==='Escape' && picked && !$('dialog').open){picked=null;render();}});
 document.addEventListener('keydown',e=>{
   if(e.defaultPrevented || e.isComposing || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey ||

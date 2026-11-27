@@ -4,12 +4,13 @@ import {parameterTest,changeDirections} from './parameters.js';
 // typed key, even when several rules point at the same external object.
 export function projectGraph(project, path, inBranch) {
   const root = path.length === 1 && path[0] === 'root';
+  const whole=root && project.placementVersion!==2;
   const nodes = new Map(), edges = new Map(), locals = new Set();
   for (const kind of ['events', 'states']) {
     for (const [id, obj] of Object.entries(project[kind])) {
       const key = kind + ':' + id;
       nodes.set(key, {key, id, kind, obj, external: true});
-      if (root || (obj.scope !== 'global' && inBranch(obj, path))) {
+      if (whole || ((root || obj.scope !== 'global') && inBranch(obj,path))) {
         locals.add(key);
         nodes.get(key).external = false;
       }
@@ -38,7 +39,7 @@ export function projectGraph(project, path, inBranch) {
       const obj={...project.entities[leaf.owner].parameters[leaf.ref],owner:leaf.owner};
       nodes.set(key,{key,id:leaf.ref,kind:'parameters',obj,external:true});
     }
-    if(root || inBranch({owner:leaf.owner,ownerPath:leaf.path},path)){
+    if(whole || inBranch({owner:leaf.owner,ownerPath:leaf.path},path)){
       nodes.get(key).external=false;locals.add(key);
     }
     return key;
@@ -53,6 +54,7 @@ export function projectGraph(project, path, inBranch) {
     else apply(rule, labels.join(' › '), negated);
   }
   for (const [id, e] of Object.entries(project.events)) {
+    if(project.placementVersion===2 && path[0]==='root' && !inBranch(e,['root']))continue;
     const event = 'events:' + id;
     walk(e.causes, (leaf, label, negated) => {
       if(leaf.op==='change'){

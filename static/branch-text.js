@@ -85,7 +85,7 @@ export function branchText(project,branch,inBranch){
     for(const child of ent.children)tree(child,depth+1);
   }
   tree(branch.at(-1),0);
-  if(whole){
+  if(whole && project.placementVersion!==2){
     const detached=Object.keys(entities).filter(id=>id!=='root' && !parents.has(id));
     if(detached.length)lines.push('','Сущности пула вне дерева проекта');
     for(const id of detached)tree(id,0);
