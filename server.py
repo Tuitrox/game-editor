@@ -93,6 +93,14 @@ def validate(p):
                         "Нужен тип параметра")
         children = entities[key]["children"]
         omitted = entities[key].get("omittedSlots", [])
+        extra = entities[key].get("localChildren", [])
+        moved = entities[key].get("movedSlots", {})
+        bindings = entities[key].get("boundOwners", {})
+        require(isinstance(extra, list) and all(k in children for k in extra)
+                and isinstance(moved, dict) and all(k in entities for k in moved.values())
+                and isinstance(bindings, dict) and all(source in entities and target in entities
+                                                      for source, target in bindings.items()),
+                "Некорректная привязка перемещённого экземпляра")
         require(isinstance(omitted, list) and all(isinstance(slot, str) for slot in omitted),
                 "Неверный список исключённых размещений")
         require(isinstance(children, list) and len(set(children)) == len(children)
@@ -220,10 +228,6 @@ def validate(p):
             require(isinstance(refs, list) and refs and all(i in states for i in refs),
                     "Выберите сущности и состояние")
             paths = paths_for(node, "paths", refs)
-            if event.get("scope") == "local":
-                branch = event.get("ownerPath") or [event["owner"]]
-                require(all(path and path[:len(branch)] == branch for path in paths),
-                        "Выберите состояние источника события или его вложенной сущности")
             targets = {(states[key]["owner"], tuple(path or [])) for key, path in zip(refs, paths)}
             require(len(targets) == len(refs), "Повтор размещения в группе")
         else:
@@ -369,7 +373,12 @@ class Handler(BaseHTTPRequestHandler):
                 for event_id, event in packet["project"]["events"].items():
                     old = previous.get(event_id)
                     if old and not migrating and old.get("scope") != "global":
-                        require(all(old.get(field) == event.get(field) for field in ("owner", "ownerPath", "scope")),
+                        old_path = old.get("ownerPath") or []
+                        entities = packet["project"]["entities"]
+                        relocated = modern and any(b not in entities.get(a, {}).get("children", [])
+                                                   for a, b in zip(old_path, old_path[1:]))
+                        require(old["owner"] == event["owner"] and old.get("scope") == event.get("scope")
+                                and (old.get("ownerPath") == event.get("ownerPath") or relocated and event.get("ownerPath")),
                                 "Источник привязанного события изменить нельзя")
                 result = db.execute("UPDATE project SET body=?, version=version+1 WHERE id=? AND version=?",
                                     (json.dumps(packet["project"], ensure_ascii=False), key, packet["version"]))

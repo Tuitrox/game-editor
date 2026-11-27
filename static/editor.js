@@ -43,7 +43,8 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
   const wrap=el('div',{class:'visual-picker'});
   const launch=btn(caption,()=>{
     if(wrap.querySelector('.tree-panel'))return;
-    const selected=new Map(initial.filter(Boolean).map(route=>[route.join('/'),route]));
+    const selectionKey=route=>p.placementVersion===2?route.at(-1):route.join('/');
+    const selected=new Map(initial.filter(Boolean).map(route=>[selectionKey(route),route]));
     const search=el('input',{type:'search',placeholder:eventFilter?'Название события или сущности…':parameterMode?'Название сущности или параметра…':stateMode?'Название сущности или состояния…':'Найти сущность по названию…',ariaLabel:'Подсветить совпадения'});
     const folders=new Map();
     const eventsByOwner=new Map();
@@ -53,6 +54,13 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
       eventsByOwner.get(event.owner).push([id,event]);
     }
     const records=[], count=el('small',{ariaLive:'polite'});
+    const canSwitch=branchPath && !(branchPath.length===1 && branchPath[0]==='root');
+    let projectWide=multiple && !canSwitch;
+    const rows=new Map(),stateNames=new Map();
+    if(multiple)for(const state of Object.values(p.states)){
+      if(!stateNames.has(state.owner))stateNames.set(state.owner,[]);
+      stateNames.get(state.owner).push(state.name.toLocaleLowerCase());
+    }
     function record(title,ancestors,addr){
       const label=el('span',{},title);
       const context=ancestors.map(key=>p.entities[key.split('/').at(-1)].name).concat(title).join(' ').toLocaleLowerCase();
@@ -60,11 +68,12 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
     }
     function branch(route,ancestors=[]){
       const key=route.at(-1),entity=p.entities[key],addr=route.join('/');
-      const name=record(entity.name,ancestors,addr),allowed=eligible(route);
+      const name=record(entity.name,ancestors,addr),allowed=multiple?stateNames.has(key):eligible(route);
       let row;
       if(multiple && allowed){
-        const check=el('input',{type:'checkbox',checked:selected.has(addr),
-          onchange:e=>{if(e.target.checked)selected.set(addr,route);else selected.delete(addr);}});
+        const selection=selectionKey(route);
+        const check=el('input',{type:'checkbox',checked:selected.has(selection),
+          onchange:e=>{if(e.target.checked)selected.set(selection,route);else selected.delete(selection);}});
         row=el('label',{class:'tree-node',title:pathLabel(p,route)},check,name);
       }else if(!multiple && allowed && !stateMode && !eventFilter){
         row=btn('',()=>apply(route),'tree-node');row.append(name);
@@ -81,7 +90,7 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
       if(entity.children.length)contents.append(el('ul',{},entity.children.map(child=>branch([...route,child],trail))));
       const line=el('div',{class:'tree-line'});
       if(contents.childElementCount){
-        const folder={manual:true,show(expanded){
+        const folder={manual:!multiple || !ancestors.length,show(expanded){
           contents.hidden=!expanded;toggle.textContent=expanded?'−':'+';
           toggle.setAttribute('aria-expanded',String(expanded));
           toggle.setAttribute('aria-label',(expanded?'Свернуть ':'Развернуть ')+entity.name);
@@ -91,12 +100,19 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
           if(!search.value.trim())folder.manual=expanded;
           folder.show(expanded);
         },'tree-toggle');
-        folders.set(addr,folder);folder.show(true);line.append(toggle);
+        folders.set(addr,folder);folder.show(folder.manual);line.append(toggle);
       }else line.append(el('span',{class:'toggle-space'}));
-      line.append(row);return el('li',{},line,contents);
+      line.append(row);
+      const item=el('li',{},line,contents);
+      rows.set(addr,item);return item;
     }
-    const roots=branchPath?[branchPath]:pickerRoots();
-    const tree=el('ul',{class:'project-tree'},roots.map(route=>branch(route)));
+    const tree=el('ul',{class:'project-tree'});
+    function fill(){
+      records.length=0;folders.clear();rows.clear();
+      const roots=branchPath && !projectWide?[branchPath]:pickerRoots();
+      tree.replaceChildren(...roots.map(route=>branch(route)));
+    }
+    fill();
     if(parameterMode==='number' && !tree.querySelector('.tree-state')){
       wrap.replaceChildren(el('p',{class:'empty'},'В проекте пока нет числовых параметров. Добавьте параметр типа «Число» на холсте сущности.'));
       return;
@@ -108,17 +124,31 @@ function visualTree(caption,{initial=[],eligible,apply,multiple=true,stateMode=f
       for(const {label,title,ancestors,addr,context} of records){
         const name=title.toLocaleLowerCase();
         const term=terms.find(word=>name.includes(word));
+        if(multiple && addr && terms.length){
+          const haystack=context+' '+(stateNames.get(addr.split('/').at(-1)) || []).join(' ');
+          if(terms.every(word=>haystack.includes(word))){
+            ancestors.forEach(key=>reveal.add(key));reveal.add(addr);matches++;
+          }
+        }
         if(!term || !terms.every(word=>context.includes(word))){label.textContent=title;continue;}
         ancestors.forEach(key=>reveal.add(key));if(addr)reveal.add(addr);
         const ix=name.indexOf(term);
-        matches++;label.replaceChildren(title.slice(0,ix),el('mark',{},title.slice(ix,ix+term.length)),title.slice(ix+term.length));
+        if(!multiple)matches++;
+        label.replaceChildren(title.slice(0,ix),el('mark',{},title.slice(ix,ix+term.length)),title.slice(ix+term.length));
       }
+      if(multiple)for(const [key,row] of rows)row.hidden=Boolean(query) && !reveal.has(key);
       for(const [key,folder] of folders)folder.show(folder.manual || (Boolean(query) && reveal.has(key)));
       count.textContent=query?'Совпадений '+matches:'';
     }
     search.oninput=highlight;
     search.onkeydown=e=>{if(e.key==='Enter')e.preventDefault();};
-    const panel=el('section',{class:'tree-panel'},search,count,tree,
+    const scope=canSwitch?btn('Выбрать из всего проекта',()=>{
+      projectWide=!projectWide;
+      scope.textContent=projectWide?'Вернуться к своей ветке':'Выбрать из всего проекта';
+      search.value='';fill();highlight();search.focus();
+    }):null;
+    if(multiple)search.placeholder='Найти сущность или состояние…';
+    const panel=el('section',{class:'tree-panel'},scope,search,count,tree,
       el('div',{class:'addrow'},multiple?btn('Применить выбор',()=>apply([...selected.values()]),'primary'):null,
         btn('Закрыть',()=>{panel.remove();launch.hidden=false;launch.focus();})));
     wrap.append(panel);launch.hidden=true;queueMicrotask(()=>{if(search.isConnected)search.focus();});
@@ -165,7 +195,7 @@ function conditionFields(node,draw,branchPath){
     chips.append(chip);
   });
   group.append(chips,visualTree(members.length?'Изменить выбор':'Выбрать сущности',{
-    branchPath,initial:paths,eligible:route=>statesOf(route.at(-1)).length>0,
+    branchPath,initial:paths,
     apply:routes=>{
       const old=new Map(paths.map((route,i)=>[route?.join('/'),refs[i]]));
       const common=refs.length && refs.every(key=>p.states[key]?.name===p.states[refs[0]]?.name)?p.states[refs[0]]?.name:null;
@@ -325,10 +355,9 @@ function ruleBoard(root,kind,event,draw){
           panel.append(el('small',{},ownerLabel(event.owner,event.ownerPath)),
             btn('Любое состояние',()=>pick(null),'choice'),
             ...statesOf(event.owner).map(([id,s])=>btn(s.name,()=>pick(id),'choice')));
-          if(!p.entities[event.owner].children.length)return;
         }
         const mode=selector([['all','Все из'],['any','Любой из']],'all',()=>{});
-        panel.append(mode,visualTree(caption,{branchPath:local?(event.ownerPath || [event.owner]):null,open:true,eligible:r=>statesOf(r.at(-1)).length>0,
+        panel.append(mode,visualTree(caption,{branchPath:local?(event.ownerPath || [event.owner]):null,open:true,
           apply:routes=>{
             if(!routes.length)return notice('Выберите сущность для проверки.');
             insert({op:mode.value,neg:false,refs:routes.map(()=>''),paths:routes});

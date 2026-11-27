@@ -275,3 +275,5 @@ button.rule-ref:hover{text-decoration:underline}
   .entity-row{flex-wrap:wrap;gap:3px;padding:6px}
   .tree-text{flex-basis:50%}.tree-stats:not(:empty){order:1;width:100%;padding-left:27px}
 }
+.scope-row.drop-target{outline:2px dashed #487553;outline-offset:-2px}
+.entity-row[draggable=true],.scope-row[draggable=true]{cursor:grab}

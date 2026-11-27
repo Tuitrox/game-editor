@@ -200,6 +200,121 @@ export function migratePlacements(project,uid){
   return out;
 }
 
+// Move the existing branch. Copies of a definition reuse their corresponding
+// placement IDs when the shared composition is edited in the pool.
+export function movePlacement(p,from,to,uid){
+  const entities=p.entities, id=from.at(-1);
+  if(from.length<2 || !entities[id]?.instanceOf)throw Error('Выберите размещённый экземпляр.');
+  if(from[0]!==to[0])throw Error('Перенос возможен внутри одного дерева. Для нового размещения используйте пул.');
+  if(to.includes(id))throw Error('Нельзя перенести сущность внутрь самой себя.');
+  if(from.at(-2)===to.at(-1))return false;
+  const moves=[[id,from.at(-2),to.at(-1)]];
+  function corresponding(start,route){
+    let target=start;
+    for(const source of route.slice(1)){
+      const slot=entities[source].slot || source;
+      target=entities[target].children.find(k=>entities[k].slot===slot);
+      if(!target)return null;
+    }
+    return target;
+  }
+  if(from[0]!=='root')for(const [key,e] of pairs(entities)){
+    if(e.instanceOf!==from[0])continue;
+    const child=corresponding(key,from);
+    if(!child)continue;
+    const dest=corresponding(key,to);
+    if(!dest)throw Error('В одном из экземпляров основы отсутствует выбранный родитель.');
+    moves.push([child,corresponding(key,from.slice(0,-1)),dest]);
+  }
+  // Some inherited rules refer to a sibling through their former parent's
+  // basis. Remember the concrete endpoint before leaving that context.
+  const records=owned(p);
+  function keepLinks(key){
+    const entity=entities[key];
+    function remember(source,target){
+      if(source!==target && source!==entity.instanceOf)(entity.boundOwners??={})[source]=target;
+    }
+    function states(a,b){
+      a.forEach((ref,i)=>remember(p.states[ref].owner,p.states[b[i]].owner));
+    }
+    function rule(a,b){
+      if(a.items)a.items.forEach((n,i)=>rule(n,b.items[i]));
+      else if(a.op==='event')remember(p.events[a.ref].owner,p.events[b.ref].owner);
+      else if(a.refs)states(a.refs,b.refs);
+      else if(a.owner)remember(a.owner,b.owner);
+    }
+    for(const [,event] of records.events.get(key) || []){
+      const source=p.events[event.sourceId];
+      if(!source)continue;
+      rule(source.conditions,event.conditions);
+      if(source.causes.items.length)rule(source.causes,event.additionalCauses?.length?event.causes.items[0]:event.causes);
+      states(source.effects,event.effects);
+      (source.parameterEffects || []).forEach((n,i)=>remember(n.owner,event.parameterEffects[i].owner));
+    }
+    entity.children.forEach(keepLinks);
+  }
+  for(const [child] of moves)keepLinks(child);
+  // A detached placement starts using its own basis as prototype. Keep any
+  // differences it previously inherited through its particular parent slot.
+  function keepComposition(key,prototype){
+    const e=entities[key],slots=new Map(entities[prototype].children.map(k=>[entities[k].slot || k,k]));
+    const actual=new Set(e.children.map(k=>entities[k].slot || k));
+    for(const slot of slots.keys())if(!actual.has(slot) && !e.omittedSlots?.includes(slot))(e.omittedSlots??=[]).push(slot);
+    for(const k of e.children){
+      const child=entities[k],model=slots.get(child.slot || k);
+      if(!model && !e.localChildren?.includes(k))(e.localChildren??=[]).push(k);
+      if(model && child.instanceOf!==entities[model].instanceOf)child.forked=true;
+      keepComposition(k,model && !child.forked?model:child.instanceOf);
+    }
+  }
+  keepComposition(id,entities[id].instanceOf);
+  const newSlot=uid();
+  for(const [child,oldParent,newParent] of moves){
+    const prev=entities[oldParent],next=entities[newParent],e=entities[child],oldSlot=e.slot || child;
+    const local=prev.localChildren?.includes(child);
+    prev.children=prev.children.filter(k=>k!==child);
+    if(local)prev.localChildren=prev.localChildren.filter(k=>k!==child);
+    if(prev.instanceOf && !local){
+      if(child===id)(prev.omittedSlots??=[]).push(oldSlot);
+      (prev.movedSlots??={})[oldSlot]=child;
+    }
+    for(const layout of [prev,...Object.values(prev.views || {})]){
+      delete layout.positions?.[child];delete layout.sizes?.[child];
+    }
+    e.slot=newSlot;
+    next.children.push(child);
+    if(child===id && next.instanceOf)(next.localChildren??=[]).push(child);
+  }
+  const parents=new Map();
+  for(const [parent,e] of pairs(entities))for(const child of e.children)parents.set(child,parent);
+  for(const [child] of moves){
+    const seen=new Set();
+    for(let k=child;k;k=parents.get(k)){
+      if(seen.has(k))throw Error('Такой перенос создаёт цикл.');
+      seen.add(k);
+    }
+  }
+  function repair(route){
+    if(!route || route.every((k,i)=>!i || parents.get(k)===route[i-1]))return route;
+    const result=[route.at(-1)];
+    while(parents.has(result[0]))result.unshift(parents.get(result[0]));
+    return result;
+  }
+  function rule(n){
+    if(n.items)n.items.forEach(rule);
+    if(n.paths)n.paths=n.paths.map(repair);
+    if(n.path)n.path=repair(n.path);
+  }
+  for(const event of Object.values(p.events)){
+    if(event.ownerPath)event.ownerPath=repair(event.ownerPath);
+    rule(event.conditions);rule(event.causes);
+    if(event.effectPaths)event.effectPaths=event.effectPaths.map(repair);
+    for(const change of event.parameterEffects || [])if(change.path)change.path=repair(change.path);
+  }
+  if(p.graphLayouts)p.graphLayouts=Object.fromEntries(pairs(p.graphLayouts).map(([key,value])=>[repair(key.split('/')).join('/'),value]));
+  return true;
+}
+
 export function syncPlacements(p,uid,beforePrune){
   const index=owned(p),done=new Set(),active=new Set(),live=new Set();
   const prototypes=new Map();
@@ -228,6 +343,7 @@ export function syncPlacements(p,uid,beforePrune){
         prototypes.set(target,k);
         return target;
       });
+      for(const child of e.localChildren || [])if(!e.children.includes(child))e.children.push(child);
       for(const kind of kinds){
         const existing=byMember(kind,id),rows=[];
         for(const [src,obj] of index[kind].get(e.instanceOf)||[]){
@@ -248,11 +364,15 @@ export function syncPlacements(p,uid,beforePrune){
   const removed=new Set(Object.keys(p.entities).filter(id=>!done.has(id)));
   if(removed.size)beforePrune?.(removed);
   for(const id of removed)delete p.entities[id];
+  if(removed.size)for(const entity of Object.values(p.entities)){
+    for(const [slot,target] of pairs(entity.movedSlots || {}))if(removed.has(target))delete entity.movedSlots[slot];
+    for(const [source,target] of pairs(entity.boundOwners || {}))if(removed.has(source) || removed.has(target))delete entity.boundOwners[source];
+  }
   for(const kind of kinds)for(const [id,o] of pairs(p[kind])){
     if(o.instanceId && !live.has(kind+'/'+id) || !p.entities[o.owner])delete p[kind][id];
   }
-  function bind(src,id,route,map){
-    const n=node(id,route,src,[]);map.set(src,n);
+  function memberNode(src,id,route){
+    const n=node(id,route,src,[]);
     for(const kind of kinds){
       const members=byMember(kind,id);
       for(const [key,obj] of index[kind].get(src)||[]){
@@ -260,14 +380,47 @@ export function syncPlacements(p,uid,beforePrune){
         if(target)n[kind].set(key,target);
       }
     }
+    return n;
+  }
+  const parents=new Map(),contexts=new Map();
+  for(const [parent,e] of pairs(p.entities))for(const child of e.children)parents.set(child,parent);
+  // A saved link on a template placement may point across rooms. For a new
+  // copy, follow the same child slots from their common ancestor.
+  function linkedOwner(id,field,key){
+    const direct=p.entities[id][field]?.[key];
+    if(direct)return direct;
+    const prototype=prototypes.get(id),target=p.entities[prototype]?.[field]?.[key];
+    if(!target)return;
+    const ancestors=new Map();
+    for(let src=prototype,placed=id;src && placed;src=parents.get(src),placed=parents.get(placed)){
+      ancestors.set(src,placed);
+    }
+    const slots=[];
+    for(let src=target;src;src=parents.get(src)){
+      if(ancestors.has(src)){
+        let placed=ancestors.get(src);
+        for(const slot of slots.reverse()){
+          placed=p.entities[placed].children.find(k=>p.entities[k].slot===slot);
+          if(!placed)return;
+        }
+        return placed;
+      }
+      slots.push(p.entities[src].slot || src);
+    }
+    return target;
+  }
+  function bind(src,id,route,map){
+    map.set(src,memberNode(src,id,route));
     const slots=new Map(p.entities[id].children.map(k=>[p.entities[k].slot,k]));
     for(const k of p.entities[src].children){
       const target=slots.get(p.entities[k].slot || k);
       if(target)bind(k,target,[...route,target],map);
+      else {
+        const moved=linkedOwner(id,'movedSlots',p.entities[k].slot || k);
+        if(moved)bind(k,moved,[moved],map);
+      }
     }
   }
-  const parents=new Map(),contexts=new Map();
-  for(const [parent,e] of pairs(p.entities))for(const child of e.children)parents.set(child,parent);
   function context(id){
     if(!contexts.has(id)){
       const mapping=new Map();
@@ -281,6 +434,8 @@ export function syncPlacements(p,uid,beforePrune){
       if(!p.entities[k].instanceOf)continue;
       const mapped=context(k).get(owner);
       if(mapped)return mapped;
+      const target=linkedOwner(k,'boundOwners',owner);
+      if(target)return memberNode(owner,target,[target]);
     }
   }
   for(const id of done){
@@ -300,7 +455,7 @@ export function syncPlacements(p,uid,beforePrune){
           if(n.items)n.items.forEach(ownCondition);
           else if(n.op==='self')n.paths=n.refs.map(()=>address || null);
           else if(n.op==='parameter' && obj.scope==='local')n.path=address || null;
-          else if(obj.scope==='local' && n.refs && address)n.paths=n.paths.map(path=>
+          else if(obj.scope==='local' && n.paths && address)n.paths=n.paths.map(path=>
             path?.[0]===id?[...address,...path.slice(1)]:path);
         }
         ownCondition(obj.conditions);

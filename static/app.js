@@ -4,7 +4,7 @@ import {projectGraph, layoutGraph, upstream} from './graph.js';
 import {wireLayer} from './wires.js';
 import {entityRoutes, pathLabel} from './routes.js';
 import {branchText} from './branch-text.js';
-import {syncPlacements,migratePlacements,forkPlacement} from './placements.js';
+import {syncPlacements,migratePlacements,forkPlacement,movePlacement} from './placements.js';
 import {parameterTypes, parameterTest, changeText} from './parameters.js';
 const $ = s => document.querySelector(s);
 export function el(tag, props = {}, ...kids) {
@@ -306,14 +306,22 @@ function instanceForm(draft){
   form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();cancel();}};
   return form;
 }
-function beginDrag(e,id) {
-  clipboardDrag={id,owner:here(),project:projectId};
-  e.dataTransfer.effectAllowed='link';
+function beginDrag(e,id,route=null) {
+  clipboardDrag={id,route,owner:here(),project:projectId};
+  e.dataTransfer.effectAllowed=route?'move':'link';
   e.dataTransfer.setData('text/plain',id);
 }
+function draggablePlacement(row,route){
+  if(tab!=='entities' || route.length<2)return;
+  row.draggable=true;
+  row.ondragstart=e=>beginDrag(e,route.at(-1),route);
+  row.ondragend=clearPoolDrag;
+}
+function clearDropTarget(){
+  $('#studio .drop-target')?.classList.remove('drop-target');
+}
 function clearPoolDrag(){
-  clipboardDrag=null;$('#board').classList.remove('drop-target');
-  $('#board .drop-target')?.classList.remove('drop-target');
+  clipboardDrag=null;clearDropTarget();
 }
 function positionCard(card,[x,y]){
   card.style.left=x+'px';
@@ -650,7 +658,8 @@ function removePlacement(route){
     'Убрать экземпляр «'+entity.name+'» из «'+parent.name+'»?';
   if(!confirm(question))return;
   const next=structuredClone(p),container=next.entities[parentId];
-  if(parent.instanceOf)(container.omittedSlots??=[]).push(entity.slot || id);
+  if(container.localChildren?.includes(id))container.localChildren=container.localChildren.filter(k=>k!==id);
+  else if(parent.instanceOf)(container.omittedSlots??=[]).push(entity.slot || id);
   container.children=container.children.filter(child=>child!==id);
   function beforePrune(members){
     const linked=Object.values(p.events).find(e=>!members.has(e.owner) && (
@@ -680,6 +689,7 @@ function entityMap(board){
     const id=route.at(-1), entity=p.entities[id], key=route.join('/');
     const item=el('li'),row=el('div',{class:'entity-row'});
     row.dataset.route=key;
+    draggablePlacement(row,route);
     const hasChildren=entity.children.length>0;
     const activate=()=>hasChildren?show(!expandedPaths.has(key)):go(id,route);
     const toggle=el('span',{class:hasChildren?'tree-disclosure':'tree-leaf',ariaHidden:'true'});
@@ -949,6 +959,7 @@ function scopeTree(){
     const open=query?!foldedMatches.has(key):expandedPaths.has('scope:'+key);
     const row=el('div',{class:'scope-row'}),item=el('li',{},row);
     row.dataset.route=key;
+    draggablePlacement(row,route);
     if(children.length){
       const toggle=btn(open?'▾':'▸',()=>{
         if(query){if(open)foldedMatches.add(key);else foldedMatches.delete(key);}
@@ -1154,26 +1165,34 @@ $('#createPool').onclick=()=>addObject();
 $('#search').oninput=renderPool;$('#edit').onclick=()=>stateCanvas?editCardFields($('.context>div'),'states',stateCanvas):editEntity(here());
 
 const board=$('#board');
-board.ondragover=e=>{
-  if(!clipboardDrag || tab!=='entities')return;
-  e.preventDefault();e.dataTransfer.dropEffect='link';
-  const target=e.target.closest('.entity-row') || board;
-  if(!target.classList.contains('drop-target')){
-    board.querySelector('.drop-target')?.classList.remove('drop-target');
-    board.classList.remove('drop-target');target.classList.add('drop-target');
-  }
-};
-board.ondragleave=e=>{
-  if(!board.contains(e.relatedTarget)){
-    board.querySelector('.drop-target')?.classList.remove('drop-target');board.classList.remove('drop-target');
-  }
-};
-board.ondrop=e=>{
-  e.preventDefault();
-  const drag=clipboardDrag,route=e.target.closest('.entity-row')?.dataset.route.split('/') || path;
-  clearPoolDrag();
-  if(drag && drag.owner===here() && drag.project===projectId)attachEntity(drag.id,route);
-};
+for(const surface of [board,$('#scopeTree')]){
+  const dropTarget=e=>e.target.closest('[data-route]') || (surface===board?board:null);
+  surface.ondragover=e=>{
+    if(!clipboardDrag || tab!=='entities')return;
+    const target=dropTarget(e);
+    if(!target)return;
+    e.preventDefault();e.dataTransfer.dropEffect=clipboardDrag.route?'move':'link';
+    if(!target.classList.contains('drop-target')){clearDropTarget();target.classList.add('drop-target');}
+  };
+  surface.ondragleave=e=>{if(!surface.contains(e.relatedTarget))clearDropTarget();};
+  surface.ondrop=e=>{
+    const drag=clipboardDrag,target=dropTarget(e);
+    clearPoolDrag();
+    if(!target || !drag || drag.owner!==here() || drag.project!==projectId || busy || tab!=='entities')return;
+    e.preventDefault();
+    const dest=target.dataset.route?.split('/') || path;
+    if(!drag.route)return attachEntity(drag.id,dest);
+    const next=structuredClone(p);
+    try{if(!movePlacement(next,drag.route,dest,uid))return;}catch(err){return notice(err.message);}
+    save(next,()=>{
+      if(!validView({path,stateCanvas:null}))path=pathTo(here());
+      for(let i=1;i<=dest.length;i++){
+        const key=dest.slice(0,i).join('/');
+        expandedPaths.add(key);expandedPaths.add('scope:'+key);
+      }
+    });
+  };
+}
 board.ondblclick=e=>{if(e.target===board && tab==='events' && basis(here())===here())addObject();};
 document.addEventListener('keydown',e=>{if(e.key==='Escape' && picked && !$('dialog').open){picked=null;render();}});
 document.addEventListener('keydown',e=>{
