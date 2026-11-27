@@ -137,7 +137,8 @@ export async function save(next, after, {undo=false}={}) {
       const valid=chain.every((id,i)=>Object.hasOwn(next.entities,id) &&
         (i===0 || next.entities[chain[i-1]].children.includes(id)));
       const sizes=Object.fromEntries(entries(layout.sizes).filter(([key])=>{
-        const [kind,id]=key.split(':');
+        const [kind,id,member]=key.split(':');
+        if(kind==='actions')return next.events[id] && leaves(next.events[id].causes).some(n=>n.op==='player' && n.id===member);
         if(kind==='parameters')return usedParameters.has(key);
         return Object.hasOwn(next[kind],id);
       }));
@@ -485,6 +486,7 @@ function showRelations() {
   for(const [id,event] of entries(p.events)){
     const emitter=[event.owner,event.ownerPath];
     for(const n of leaves(event.causes)){
+      if(n.op==='player')continue;
       if(n.op==='change'){
         add([n.owner,n.path],emitter,id,changeText(p,n)+' · причина «'+event.name+'»');continue;
       }
@@ -854,14 +856,15 @@ function renderEventBoard(board){
     }
   }
   for(const n of graph.nodes){
-    const event=n.kind==='events', parameter=n.kind==='parameters', type=event?'Событие':parameter?'Параметр':'Состояние';
+    const event=n.kind==='events', parameter=n.kind==='parameters', action=n.kind==='actions';
+    const type=event?'Событие':parameter?'Параметр':action?'Действие игрока':'Состояние';
     const owner=n.obj.scope==='global'?'Весь проект':p.entities[n.obj.owner].name;
     const card=el('article',{class:'spacecard owncard graph-card '+n.kind+(n.external?' external':'')});
     const select=()=>highlight(selectedNode===n.key?null:n.key);
     const title=btn(n.obj.name,select,'graph-title');
     const route=n.obj.ownerPath || (n.external?pathTo(n.obj.owner):pathTo(n.obj.owner,path));
-    const details=btn('↗',()=>event?eventDetail(n.id):parameter?go(n.obj.owner,route,'entities'):openStateCanvas(n.id,route),'graph-open');
-    details.title=event?'Открыть правило':parameter?'Открыть сущность':'Открыть состояние';
+    const details=btn('↗',()=>event || action?eventDetail(n.eventId ?? n.id):parameter?go(n.obj.owner,route,'entities'):openStateCanvas(n.id,route),'graph-open');
+    details.title=event || action?'Открыть правило':parameter?'Открыть сущность':'Открыть состояние';
     details.setAttribute('aria-label',details.title+' «'+n.obj.name+'»');
     card.dataset.key=n.key;
     card.append(el('small',{},(n.external?'Ярлык · ':'')+type),title,el('span',{class:'graph-owner',title:pathLabel(p,route)},owner),details);

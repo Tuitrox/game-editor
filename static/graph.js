@@ -57,7 +57,14 @@ export function projectGraph(project, path, inBranch) {
     if(project.placementVersion===2 && path[0]==='root' && !inBranch(e,['root']))continue;
     const event = 'events:' + id;
     walk(e.causes, (leaf, label, negated) => {
-      if(leaf.op==='change'){
+      if(leaf.op==='player'){
+        if(!locals.has(event))return;
+        const key='actions:'+id+':'+leaf.id;
+        const obj={name:leaf.name,owner:e.owner,ownerPath:e.ownerPath,scope:e.scope};
+        nodes.set(key,{key,id:leaf.id,eventId:id,kind:'actions',obj,external:false});
+        locals.add(key);
+        link(key,event,'cause','Действие игрока · '+label,undefined,negated);
+      }else if(leaf.op==='change'){
         const caption=changeDirections[leaf.direction];
         link(parameterKey(leaf),event,'cause',[label,caption].filter(Boolean).join(' › '),leaf.path,negated,caption);
       }else link('events:'+leaf.ref, event, 'cause', 'Причина · '+label, undefined, negated);

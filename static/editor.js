@@ -209,6 +209,7 @@ export function describeRule(n,event) {
   if(n.neg)return ruleGroup('not',[describeRule({...n,neg:false},event)]);
   if(n.items)return ruleGroup(n.op,n.items.map(child=>describeRule(child,event)));
   if(n.op==='event')return ruleReference('event',n.ref);
+  if(n.op==='player')return el('span',{class:'rule-ref ref-player'},'Действие игрока · '+n.name);
   if(n.op==='change')return changeReference(n);
   if(n.op==='parameter')return el('span',{class:'rule-ref ref-parameter'},ownerLabel(n.owner,n.path)+' → '+parameterTest(p,n));
   if(n.op==='self')return n.refs.length?ruleReference('state',n.refs[0],event.ownerPath):
@@ -294,12 +295,18 @@ function ruleBoard(root,kind,event,draw){
     Object.assign(node,{owner,ref,path});
   }
   function addLeaf(parent,leafType){
-    const caption={event:'Выбрать событие-причину',state:'Выбрать состояние',parameter:'Выбрать параметр',change:'Выбрать изменение параметра'}[leafType];
+    const caption={event:'Выбрать событие-причину',player:'Добавить действие игрока',state:'Выбрать состояние',parameter:'Выбрать параметр',change:'Выбрать изменение параметра'}[leafType];
     function insert(child){
       parent.items.push(child);draw();
     }
     return el('button',{type:'button',class:'add-leaf',title:caption,ariaLabel:caption,onclick:e=>{
       board.querySelector('.slot-chooser')?.remove();
+      if(leafType==='player'){
+        const id=uid();
+        insert({op:'player',id,name:'',neg:false});
+        document.getElementById('player-action-'+id)?.focus();
+        return;
+      }
       const panel=el('div',{class:'slot-chooser'});
       e.currentTarget.parentElement.after(panel);
       if(leafType==='event'){
@@ -327,7 +334,7 @@ function ruleBoard(root,kind,event,draw){
             insert({op:mode.value,neg:false,refs:routes.map(()=>''),paths:routes});
           }}));
       }
-    }},{event:'+ Событие',state:'+ Состояние',parameter:'+ Параметр',change:'+ Параметр'}[leafType]);
+    }},{event:'+ Событие',player:'+ Действие игрока',state:'+ Состояние',parameter:'+ Параметр',change:'+ Параметр'}[leafType]);
   }
   function slot(parent,index){
     const zone=el('div',{class:'rule-slot drop-only'});
@@ -369,6 +376,7 @@ function ruleBoard(root,kind,event,draw){
       if(node.items.length<2 && node.op!=='not')shell.classList.add('single-rule');
       shell.prepend(el('div',{class:'operator-rail'},operator));
     }
+    else if(node.op==='player')head.append(el('strong',{},'Действие игрока'));
     else if(node.op==='change')head.append(el('strong',{},'Изменение параметра'));
     else if(node.op==='parameter')head.append(el('strong',{},'Параметр · '+parameterTypes[p.entities[node.owner].parameters[node.ref].type || 'number']));
     else if(kind==='conditions' && node.op!=='self'){
@@ -388,8 +396,11 @@ function ruleBoard(root,kind,event,draw){
       shell.append(slot(node,node.items.length));
       if(node.op==='not' && node.items.length)return shell;
       const append=child=>{node.items.push(child);draw();};
-      const leafTypes=kind==='causes'?['event','change']:['state','parameter'];
+      const leafTypes=kind==='causes'?['event','change','player']:['state','parameter'];
       shell.append(el('div',{class:'addrow'},...leafTypes.map(type=>addLeaf(node,type)),...['and','or','not'].map(op=>btn('+ '+words[op],()=>append({op,neg:false,items:[]})))));
+    }else if(node.op==='player'){
+      shell.append(label('Что сделал игрок',el('input',{id:'player-action-'+node.id,required:true,
+        value:node.name,placeholder:'Нажал кнопку «Пуск»',oninput:e=>{node.name=e.target.value;}})));
     }else if(node.op==='change')shell.append(changeFields(node,draw));
     else if(kind==='causes'){
       shell.append(el('p',{class:'rule-ref ref-event'},fullEvent(node.ref)),eventPicker('Сменить событие',id=>{node.ref=id;draw();}));

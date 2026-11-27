@@ -38,7 +38,7 @@ function rewrite(event,old,at,resolve){
     if(n.items)n.items.forEach(walk);
     else if(n.op==='event')n.ref=resolve(old.events[n.ref].owner)?.events.get(n.ref) || n.ref;
     else if(n.refs)n.refs=stateRefs(n.refs,n.paths);
-    else parameter(n);
+    else if(n.op==='parameter' || n.op==='change')parameter(n);
   }
   e.owner=at.id;
   if(e.ownerPath)e.ownerPath=at.route;
@@ -183,6 +183,10 @@ export function migratePlacements(project,uid){
       const translate=key=>{
         const [kind,id,param]=key.split(':');
         if(kind==='parameters'){const owner=fallback(id,chain);return owner?'parameters:'+owner.id+':'+param:key;}
+        if(kind==='actions'){
+          const event=fallback(old.events[id].owner,chain)?.events.get(id) || id;
+          return 'actions:'+event+':'+param;
+        }
         const owner=old[kind][id]?.owner;
         return kind+':'+(fallback(owner,chain)?.[kind].get(id) || id);
       };

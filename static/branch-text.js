@@ -63,6 +63,7 @@ export function branchText(project,branch,inBranch){
       else if(n.op==='not')value='НЕ ('+children[0]+')';
       else value=children.length===1?children[0]:'('+children.join(n.op==='and'?' И ':' ИЛИ ')+')';
     }else if(n.op==='event')value='событие '+(describedEvents.has(n.ref) && !ambiguous.has(eventNames[n.ref])?'«'+eventNames[n.ref]+'»':eventName(n.ref));
+    else if(n.op==='player')value='действие игрока «'+n.name+'»';
     else if(n.op==='change')value=change(n);
     else if(n.op==='parameter'){
       value=parameterTest(project,n,paramName(n))+' '+place(n.owner,n.path);

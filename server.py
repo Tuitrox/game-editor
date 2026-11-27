@@ -134,25 +134,6 @@ def validate(p):
         active.remove(key)
         visited.add(key)
 
-    for route, layout in p.get("graphLayouts", {}).items():
-        require(isinstance(route, str) and isinstance(layout, dict), "Неверная раскладка схемы")
-        chain = route.split("/")
-        require(all(k in entities for k in chain) and
-                all(b in entities[a]["children"] for a, b in zip(chain, chain[1:])), "Неизвестный холст")
-        nodes = {"events:" + k for k in events} | {"states:" + k for k in states}
-        nodes.update(f"parameters:{owner}:{k}" for owner, entity in entities.items()
-                     for k in entity.get("parameters", {}))
-        coordinates(layout["positions"], nodes)
-        coordinates(layout["sizes"], nodes)
-        for w, h in layout["sizes"].values():
-            require(220 <= w <= 10000 and 100 <= h <= 10000, "Неверный размер карточки")
-        for edge_key, bends in layout["bends"].items():
-            parts = edge_key.split("|")
-            require(len(parts) == 3 and parts[0] in nodes and parts[2] in nodes and
-                    parts[1] in ("cause", "not-cause", "condition", "not-condition", "effect"), "Неизвестная связь")
-            require(isinstance(bends, list), "Неверные точки поворота")
-            coordinates(dict(enumerate(bends)), range(len(bends)))
-
     for key in entities:
         visit(key)
     for obj in [*states.values(), *events.values()]:
@@ -183,6 +164,10 @@ def validate(p):
         require(parameter_type(node) == "number", "Выберите числовой параметр")
         require(node["direction"] in ("up", "down"), "Выберите направление изменения")
 
+    nodes = {"events:" + k for k in events} | {"states:" + k for k in states}
+    nodes.update(f"parameters:{owner}:{k}" for owner, entity in entities.items()
+                     for k in entity.get("parameters", {}))
+
     def rule(node, kind, event, outer=False):
         require(type(node["neg"]) is bool, "Неверное отрицание")
         op = node["op"]
@@ -195,6 +180,14 @@ def validate(p):
                 rule(child, kind, event)
         elif kind == "causes" and op == "event":
             require(node["ref"] in events, "Выберите событие")
+        elif kind == "causes" and op == "player":
+            action_id = node.get("id")
+            require(isinstance(action_id, str) and re.fullmatch(r"[a-zA-Z0-9-]+", action_id),
+                    "Неверный идентификатор действия игрока")
+            require(isinstance(node.get("name"), str) and node["name"].strip(), "Опишите действие игрока")
+            key = f"actions:{event_id}:{action_id}"
+            require(key not in nodes, "Повтор идентификатора действия игрока")
+            nodes.add(key)
         elif kind == "causes" and op == "change":
             check_change(node)
         elif kind == "conditions" and op == "parameter":
@@ -233,7 +226,7 @@ def validate(p):
         else:
             raise ValueError("Неверный блок правила")
 
-    for event in events.values():
+    for event_id, event in events.items():
         if "additionalCauses" in event:
             extra = event["additionalCauses"]
             require("instanceId" in event and isinstance(extra, list) and
@@ -251,6 +244,22 @@ def validate(p):
         require(isinstance(changes, list), "Неверный список изменений параметров")
         for change in changes:
             check_change(change)
+
+    for route, layout in p.get("graphLayouts", {}).items():
+        require(isinstance(route, str) and isinstance(layout, dict), "Неверная раскладка схемы")
+        chain = route.split("/")
+        require(all(k in entities for k in chain) and
+                all(b in entities[a]["children"] for a, b in zip(chain, chain[1:])), "Неизвестный холст")
+        coordinates(layout["positions"], nodes)
+        coordinates(layout["sizes"], nodes)
+        for w, h in layout["sizes"].values():
+            require(220 <= w <= 10000 and 100 <= h <= 10000, "Неверный размер карточки")
+        for edge_key, bends in layout["bends"].items():
+            parts = edge_key.split("|")
+            require(len(parts) == 3 and parts[0] in nodes and parts[2] in nodes and
+                    parts[1] in ("cause", "not-cause", "condition", "not-condition", "effect"), "Неизвестная связь")
+            require(isinstance(bends, list), "Неверные точки поворота")
+            coordinates(dict(enumerate(bends)), range(len(bends)))
 
 
 class Handler(BaseHTTPRequestHandler):

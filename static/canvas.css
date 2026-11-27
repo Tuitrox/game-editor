@@ -159,6 +159,7 @@ button.rule-ref:hover{text-decoration:underline}
 
 .project-actions{display:flex;gap:8px;flex-wrap:wrap}
 .graph-card.events{background:#fff0e0;border-color:#bd7739}
+.graph-card.actions,.rule-ref.ref-player{background:#e2f4ed;border-color:#488670}
 .graph-card.states{background:#eaf4fa;border-color:#5992aa}
 .graph-card.parameters,.rule-ref.ref-parameter{background:#f2edf8;border-color:#9378a8}
 .parameter-check{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
