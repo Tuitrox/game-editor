@@ -126,9 +126,9 @@ function topology(project) {
     entries(project.events).map(([id,e])=>[id,e.owner,e.ownerPath,e.scope,e.causes,e.conditions,e.effects,e.effectPaths,e.parameterEffects])
   ]);
 }
-export async function save(next, after, {undo=false}={}) {
+export async function save(next, after, {undo=false,beforePrune}={}) {
   if (busy) return;
-  try{syncPlacements(next,uid);}catch(err){notice(err.message);return;}
+  try{syncPlacements(next,uid,beforePrune);}catch(err){notice(err.message);return;}
   // Hand edits belong to this topology. Rebuild after nodes or logical links change.
   if (!undo && next.graphLayouts && topology(p)!==topology(next)) {
     const usedParameters=new Set(Object.values(next.events).flatMap(e=>parameterRefs(e).map(n=>'parameters:'+n.owner+':'+n.ref)));
@@ -641,6 +641,39 @@ function entityParameters(owner){
   show();
   return section;
 }
+function removePlacement(route){
+  if(busy || route.length<2)return;
+  const id=route.at(-1), parentId=route.at(-2);
+  const entity=p.entities[id], parent=p.entities[parentId];
+  if(!entity?.instanceOf || !parent?.children.includes(id))return;
+  const question=route[0]!=='root'?'Убрать «'+entity.name+'» из состава основы «'+p.entities[route[0]].name+'» и её экземпляров?':
+    'Убрать экземпляр «'+entity.name+'» из «'+parent.name+'»?';
+  if(!confirm(question))return;
+  const next=structuredClone(p),container=next.entities[parentId];
+  if(parent.instanceOf)(container.omittedSlots??=[]).push(entity.slot || id);
+  container.children=container.children.filter(child=>child!==id);
+  function beforePrune(members){
+    const linked=Object.values(p.events).find(e=>!members.has(e.owner) && (
+      e.effects.some(k=>members.has(p.states[k].owner)) ||
+      leaves(e.conditions).some(n=>n.refs?.some(k=>members.has(p.states[k].owner))) ||
+      leaves(e.causes).some(n=>n.op==='event' && members.has(p.events[n.ref].owner)) ||
+      parameterRefs(e).some(n=>members.has(n.owner))));
+    if(linked)throw Error('Экземпляр используется в событии «'+linked.name+'» ('+p.entities[linked.owner].name+'). Сначала измените эту связь.');
+    const removedEvents=entries(p.events).filter(([,event])=>members.has(event.owner)).map(([key])=>key);
+    for(const [owner,host] of entries(next.entities)){
+      if(members.has(owner))continue;
+      for(const child of p.entities[owner]?.children || [])if(members.has(child))clearPlacement(host,child);
+      for(const key of removedEvents){
+        delete host.eventLinks?.[key];
+        delete host.layers?.events?.[key];
+        delete host.layerSizes?.events?.[key];
+      }
+    }
+  }
+  save(next,()=>{
+    if(!p.entities[here()])go(parentId,route.slice(0,-1),'entities');
+  },{beforePrune});
+}
 function entityMap(board){
   const root=el('ul',{class:'entity-tree'});
   function branch(route){
@@ -675,27 +708,9 @@ function entityMap(board){
       }
       section('states',states);section('events',events);
 
-      const unlink=btn('×',()=>{
-        const next=structuredClone(p),parent=next.entities[parentId];
-        if(entity.instanceOf){
-          if(!confirm('Убрать экземпляр «'+entity.name+'» из помещения?'))return;
-          const members=descendants(id);
-          if([p.states,p.events].some(group=>Object.values(group).some(o=>members.has(o.owner) && !o.instanceId)))
-            return notice('У экземпляра есть собственные правила или состояния. Сначала удалите их.');
-          const linked=Object.values(p.events).find(e=>!members.has(e.owner) && (
-            e.effects.some(k=>members.has(p.states[k].owner)) ||
-            leaves(e.conditions).some(n=>n.refs?.some(k=>members.has(p.states[k].owner))) ||
-            leaves(e.causes).some(n=>n.op==='event' && members.has(p.events[n.ref].owner)) ||
-            parameterRefs(e).some(n=>members.has(n.owner))));
-          if(linked)return notice('Этот экземпляр используется в событии «'+linked.name+'». Сначала измените связь.');
-          delete next.entities[id];
-        }
-        parent.children=parent.children.filter(child=>child!==id);
-        clearPlacement(parent,id);save(next);
-      },'tree-action');
+      const unlink=btn('×',()=>removePlacement(route),'tree-action');
       unlink.title='Убрать из «'+p.entities[parentId].name+'»';unlink.setAttribute('aria-label',unlink.title);
-      row.append(stats);
-      if(basis(parentId)===parentId)row.append(unlink);
+      row.append(stats,unlink);
     }
     item.append(row);
     if(entityDraft?.target===key)item.append(entityDraftForm());
@@ -1012,6 +1027,7 @@ function render() {
   }
   $('#actions').append(el('button',{type:'button',id:'exportText',onclick:showBranchText,title:'Показать текст выбранной ветки'},'В текст'));
   if(basis(id)!==id && !stateCanvas)$('#actions').append(btn('Создать отдельную основу',()=>forkForm(id)));
+  if(entity.instanceOf && path.length>1 && tab==='entities')$('#actions').append(btn('Убрать экземпляр',()=>removePlacement(path),'danger'));
   if(basis(id)!==id)$('#actions').prepend(btn('Открыть основу · '+p.entities[basis(id)].name,()=>openBasis(id)));
   renderPool();
 }

@@ -92,6 +92,9 @@ def validate(p):
                 require(type(value) in (int, float) and -sys.float_info.max <= value <= sys.float_info.max,
                         "Нужен тип параметра")
         children = entities[key]["children"]
+        omitted = entities[key].get("omittedSlots", [])
+        require(isinstance(omitted, list) and all(isinstance(slot, str) for slot in omitted),
+                "Неверный список исключённых размещений")
         require(isinstance(children, list) and len(set(children)) == len(children)
                 and "root" not in children, "Недопустимое вложение")
         positions = entities[key].get("positions", {})

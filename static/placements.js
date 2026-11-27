@@ -200,8 +200,9 @@ export function migratePlacements(project,uid){
   return out;
 }
 
-export function syncPlacements(p,uid){
+export function syncPlacements(p,uid,beforePrune){
   const index=owned(p),done=new Set(),active=new Set(),live=new Set();
+  const prototypes=new Map();
   const byMember=(kind,owner)=>new Map((index[kind].get(owner)||[]).map(([id,o])=>[o.member || id,id]));
   // Materialize children and reserve every member ID before resolving rule links.
   function prepare(id){
@@ -215,12 +216,16 @@ export function syncPlacements(p,uid){
       e.desc=base.desc;
       if(base.parameters)e.parameters=copy(base.parameters);else delete e.parameters;
       const old=new Map(e.children.map(k=>[p.entities[k].slot,k]));
-      e.children=base.children.map(k=>{
+      const omitted=new Set(e.omittedSlots || []);
+      const prototype=p.entities[prototypes.get(id)];
+      const slots=prototype?.instanceOf===e.instanceOf?prototype.children:base.children;
+      e.children=slots.filter(k=>!omitted.has(p.entities[k].slot || k)).map(k=>{
         const child=p.entities[k],slot=child.slot || k;
         const target=old.get(slot) || uid();
         const placed=p.entities[target]??={name:child.name,desc:child.desc,children:[],slot};
         if(!placed.forked)placed.instanceOf=child.instanceOf || k;
         placed.name=child.name;
+        prototypes.set(target,k);
         return target;
       });
       for(const kind of kinds){
@@ -240,7 +245,9 @@ export function syncPlacements(p,uid){
     done.add(id);active.delete(id);
   }
   for(const [id,e] of pairs(p.entities))if(!e.instanceOf)prepare(id);
-  for(const [id,e] of pairs(p.entities))if(e.instanceOf && !done.has(id))delete p.entities[id];
+  const removed=new Set(Object.keys(p.entities).filter(id=>!done.has(id)));
+  if(removed.size)beforePrune?.(removed);
+  for(const id of removed)delete p.entities[id];
   for(const kind of kinds)for(const [id,o] of pairs(p[kind])){
     if(o.instanceId && !live.has(kind+'/'+id) || !p.entities[o.owner])delete p[kind][id];
   }
