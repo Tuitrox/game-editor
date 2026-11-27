@@ -4,6 +4,7 @@ import {projectGraph, layoutGraph, upstream} from './graph.js';
 import {wireLayer} from './wires.js';
 import {entityRoutes, pathLabel} from './routes.js';
 import {branchText} from './branch-text.js';
+import {refreshInstances} from './instances.js';
 import {parameterTypes, parameterTest, changeText} from './parameters.js';
 const $ = s => document.querySelector(s);
 export function el(tag, props = {}, ...kids) {
@@ -127,6 +128,7 @@ function topology(project) {
 }
 export async function save(next, after, {undo=false}={}) {
   if (busy) return;
+  try{refreshInstances(next,uid);}catch(err){notice(err.message);return;}
   // Hand edits belong to this topology. Rebuild after nodes or logical links change.
   if (!undo && next.graphLayouts && topology(p)!==topology(next)) {
     const usedParameters=new Set(Object.values(next.events).flatMap(e=>parameterRefs(e).map(n=>'parameters:'+n.owner+':'+n.ref)));
@@ -191,15 +193,22 @@ const blank=msg=>el('p',{class:'empty'},msg);
 const count=(obj,id)=>entries(obj).filter(([,o])=>o.owner===id).length;
 function editEntity(id) {
   const draft={...p.entities[id]};
+  if(draft.instanceId)return openBasis(id);
   const form=el('form',{onsubmit:e=>{
     e.preventDefault();
     const next=structuredClone(p);
     Object.assign(next.entities[id],{name:draft.name,desc:draft.desc});save(next);
-  }},...fields(draft),footer(id!=='root'?btn('Удалить из пула',()=>deleteObj('entities',id),'danger'):null,
+  }},...(draft.instanceOf?fields(draft).slice(0,1):fields(draft)),footer(id!=='root' && !draft.instanceOf?btn('Удалить из пула',()=>deleteObj('entities',id),'danger'):null,
     el('button',{type:'submit',class:'primary'},'Сохранить')));
-  modal('Редактировать сущность',form);
+  modal(draft.instanceOf?'Название экземпляра':'Редактировать сущность',form);
 }
+function basis(id){
+  while(p.entities[id].instanceOf || p.entities[id].instanceId)id=p.entities[id].instanceOf || p.entities[id].sourceId;
+  return id;
+}
+function openBasis(id){go(basis(id),null,tab);}
 function beginEntity(route=null){
+  if(route && basis(route.at(-1))!==route.at(-1))return notice('Состав общих частей меняется в основе. Нажмите «Открыть основу».');
   const target=route?.join('/') ?? null;
   if(!entityDraft || entityDraft.target!==target)entityDraft={target,name:'',desc:''};
   if(route)expandedPaths.add(target);
@@ -207,6 +216,7 @@ function beginEntity(route=null){
 }
 function entityDraftForm(){
   const draft=entityDraft;
+  if(draft.source)return instanceForm(draft);
   const cancel=()=>{entityDraft=null;render();};
   const form=el('form',{class:'entity-draft',ariaLabel:'Новая сущность',onsubmit:e=>{
     e.preventDefault();
@@ -225,6 +235,8 @@ function entityDraftForm(){
 }
 export function deleteObj(type,id) {
   const next=structuredClone(p), obj=next[type][id];
+  if(obj.instanceId)return notice('Элемент унаследован. Его можно удалить в основе.');
+  if(type==='entities' && Object.values(p.entities).some(e=>e.instanceOf===id))return notice('У основы есть экземпляры. Сначала уберите их из дерева.');
   if(type==='entities' && (count(p.events,id)||count(p.states,id))) return notice('Сначала удалите собственные состояния и события этой сущности.');
   if(type==='entities' && Object.values(p.events).some(e=>parameterRefs(e).some(n=>n.owner===id)))return notice('Параметры сущности используются в правилах.');
   if(type==='states' && entries(p.events).some(([,e])=>e.effects.includes(id)||leaves(e.conditions).some(n=>n.refs?.includes(id)))) return notice('Состояние используется в правилах. Сначала измените связанные события.');
@@ -254,10 +266,32 @@ function attachEntity(id,route) {
   if(busy || tab!=='entities' || !Object.hasOwn(p.entities,id))return;
   const parentId=route.at(-1);
   if(descendants(id).has(parentId))return notice('Такое вложение создаёт цикл.');
-  if(p.entities[parentId].children.includes(id))return notice('Сущность уже входит в этот раздел.');
-  const next=structuredClone(p);
-  next.entities[parentId].children.push(id);
-  return save(next,()=>{picked=null;expandedPaths.add(route.join('/'));});
+  if(basis(parentId)!==parentId)return notice('Общий состав экземпляра меняется в основе.');
+  const siblings=p.entities[parentId].children.map(key=>p.entities[key].name);
+  let number=1;
+  while(siblings.includes(p.entities[id].name+' '+number))number++;
+  picked=null;
+  entityDraft={target:route.join('/'),source:id,name:p.entities[id].name+' '+number};
+  expandedPaths.add(route.join('/'));render();
+  const input=$('.entity-draft input');input?.focus();input?.select();
+}
+function instanceForm(draft){
+  const parent=draft.target.split('/').at(-1),source=p.entities[draft.source];
+  function commit(link){
+    if(busy || !draft.name.trim() && !link)return;
+    const next=structuredClone(p),id=link?draft.source:uid();
+    if(!link)next.entities[id]={instanceOf:draft.source,name:draft.name.trim(),desc:source.desc,children:[]};
+    next.entities[parent].children.push(id);
+    save(next,()=>{entityDraft=null;});
+  }
+  const input=el('input',{value:draft.name,required:true,oninput:e=>draft.name=e.target.value});
+  const cancel=()=>{entityDraft=null;render();};
+  const form=el('form',{class:'entity-draft',onsubmit:e=>{e.preventDefault();commit(false);}},
+    label('Название экземпляра · '+source.name,input),
+    footer(btn('Отмена',cancel),p.entities[parent].children.includes(draft.source)?null:
+      btn('Вложить саму сущность',()=>commit(true)),el('button',{type:'submit',class:'primary'},'Создать экземпляр')));
+  form.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();cancel();}};
+  return form;
 }
 function beginDrag(e,id) {
   clipboardDrag={id,owner:here(),project:projectId};
@@ -386,7 +420,7 @@ function renderPool() {
   const needle=$('#search').value.trim().toLocaleLowerCase();
   const rows=[], scope=descendants(here());
   for(const [id,obj] of entries(p[tab])) {
-    if(tab==='entities' ? id==='root' : here()!=='root' && !scope.has(obj.owner))continue;
+    if(tab==='entities' ? id==='root' || obj.instanceId || obj.instanceOf : here()!=='root' && !scope.has(obj.owner))continue;
     if(tab==='events' && here()!=='root' && !eventInBranch(obj,path))continue;
     if(!obj.name.toLocaleLowerCase().includes(needle))continue;
     const b=btn(obj.name,()=>tab==='entities'?choose(id):tab==='states'?stateDetail(id):eventDetail(id),'poolitem');
@@ -396,7 +430,11 @@ function renderPool() {
       b.draggable=true;b.ondragstart=e=>beginDrag(e,id);b.ondragend=clearPoolDrag;
       const jump=btn('↗',()=>go(id),'jump');jump.title='Открыть '+obj.name;
       rows.push(el('div',{class:'poolrow'},b,jump));
-    } else {b.title=p.entities[obj.owner].name;rows.push(b);}
+    } else {
+      b.title=p.entities[obj.owner].name;
+      if(obj.instanceId || p.entities[obj.owner].instanceOf)b.append(el('small',{},' · '+b.title));
+      rows.push(b);
+    }
   }
   $('#pool').replaceChildren(...(rows.length?rows:[el('p',{class:'emptyPool'},needle?'Ничего не найдено':'Пока пусто. Нажмите ＋, чтобы добавить объект.')]));
 }
@@ -413,7 +451,7 @@ function eventDetail(id) {
       ...(e.parameterEffects || []).map(changeReference),
       ...e.effects.map((s,i)=>ruleReference('state',s,e.effectPaths?.[i])),
       ...targets.map(k=>ruleReference('event',k))):blank('Последствий пока нет'),
-    footer(btn('Редактировать правило',()=>editEvent(e.owner,id),'primary')));
+    footer(btn(e.instanceId?'Редактировать в основе':'Редактировать правило',()=>editEvent(e.owner,id),'primary')));
   $('#modal').dataset.event=id;
 }
 export {eventDetail,stateDetail};
@@ -456,6 +494,9 @@ function scopePath(owner){
 }
 export function currentOwnerPath(owner){return scopePath(owner);}
 function editCardFields(container,type,id,focusField='name',owner=here()){
+  if(id && (p[type][id].instanceId || p[type][id].instanceOf && focusField==='desc')){
+    return notice('Это поле унаследовано. Его можно изменить в основе.');
+  }
   const obj=id?p[type][id]:{name:'',desc:''};
   container.querySelector('.inline-fields')?.remove();
   for(const hidden of container.querySelectorAll('[data-edit-hidden]')){hidden.hidden=false;delete hidden.dataset.editHidden;}
@@ -510,7 +551,7 @@ function drawActions() {
   if(tab==='entities') {
     if(picked)bar.append(el('span',{class:'placementbar'},'Куда вложить «'+p.entities[picked].name+'»?'),
       btn('В текущий раздел',()=>attachEntity(picked,path)),btn('Отмена',()=>{picked=null;render();}));
-    else bar.append(btn('＋ Вложенная сущность',()=>beginEntity(path),'primary'));
+    else if(basis(here())===here())bar.append(btn('＋ Вложенная сущность',()=>beginEntity(path),'primary'));
     return;
   }
   bar.append(btn(tab==='states'?'＋ Состояние':'＋ Событие',()=>addObject(),'primary'));
@@ -533,6 +574,11 @@ function globalEvents(){
 function entityParameters(owner){
   const section=el('section',{class:'entity-parameters',ariaLabel:'Параметры сущности'});
   const parameters=p.entities[owner].parameters || {};
+  if(basis(owner)!==owner){
+    if(Object.keys(parameters).length)section.append(el('h3',{},'Параметры'),...entries(parameters).map(([,param])=>
+      el('div',{class:'parameter-row'},el('span',{},param.name),el('strong',{},parameterTypes[param.type || 'number']))));
+    return section;
+  }
   function show(editing=null){
     const add=btn('＋ Параметр',()=>show(''));
     add.disabled=editing==='';
@@ -617,13 +663,28 @@ function entityMap(board){
       edit.title='Изменить '+entity.name;edit.setAttribute('aria-label',edit.title);
       const unlink=btn('×',()=>{
         const next=structuredClone(p),parent=next.entities[parentId];
+        if(entity.instanceOf){
+          if(!confirm('Убрать экземпляр «'+entity.name+'» из помещения?'))return;
+          const members=descendants(id);
+          if([p.states,p.events].some(group=>Object.values(group).some(o=>members.has(o.owner) && !o.instanceId)))
+            return notice('У экземпляра есть собственные правила или состояния. Сначала удалите их.');
+          const linked=Object.values(p.events).find(e=>!members.has(e.owner) && (
+            e.effects.some(k=>members.has(p.states[k].owner)) ||
+            leaves(e.conditions).some(n=>n.refs?.some(k=>members.has(p.states[k].owner))) ||
+            leaves(e.causes).some(n=>n.op==='event' && members.has(p.events[n.ref].owner)) ||
+            parameterRefs(e).some(n=>members.has(n.owner))));
+          if(linked)return notice('Этот экземпляр используется в событии «'+linked.name+'». Сначала измените связь.');
+          delete next.entities[id];
+        }
         parent.children=parent.children.filter(child=>child!==id);
         clearPlacement(parent,id);save(next);
       },'tree-action');
       unlink.title='Убрать из «'+p.entities[parentId].name+'»';unlink.setAttribute('aria-label',unlink.title);
       const add=btn('＋',()=>beginEntity(route),'tree-action tree-add');
       add.title='Создать внутри «'+entity.name+'»';add.setAttribute('aria-label',add.title);
-      row.append(stats,add,edit,unlink);
+      row.append(stats);
+      if(basis(id)===id)row.append(add);
+      if(!entity.instanceId)row.append(edit,unlink);
     }
     item.append(row);
     if(entityDraft?.target===key)item.append(entityDraftForm());
@@ -919,7 +980,10 @@ function render() {
   }));
   if(stateCanvas){
     const stateId=stateCanvas;
-    $('#actions').replaceChildren(btn('Удалить состояние',()=>deleteObj('states',stateId),'danger'));
+    let source=stateId;
+    while(p.states[source].instanceId)source=p.states[source].sourceId;
+    $('#actions').replaceChildren(source===stateId?btn('Удалить состояние',()=>deleteObj('states',stateId),'danger'):
+      btn('Состояние основы ↗',()=>openStateCanvas(source)));
     const detail=el('section',{class:'state-workspace'});
     detail.append(stateRules(linksForState(stateReferences(),stateId,[path])));
     const board=$('#board');board.replaceChildren(detail);board.style.width='100%';board.style.height='100%';
@@ -931,6 +995,7 @@ function render() {
     else renderEventBoard(board);
   }
   $('#actions').append(el('button',{type:'button',id:'exportText',onclick:showBranchText,title:'Показать текст выбранной ветки'},'В текст'));
+  if(basis(id)!==id)$('#actions').prepend(btn('Открыть основу · '+p.entities[basis(id)].name,()=>openBasis(id)));
   renderPool();
 }
 function showBranchText(){

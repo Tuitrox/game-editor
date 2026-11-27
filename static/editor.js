@@ -413,6 +413,8 @@ function ruleBoard(root,kind,event,draw){
   board.append(block(root,null));return board;
 }
 export function editEvent(owner,id=null,scope='local') {
+  const inherited=Boolean(id && p.events[id].instanceId);
+  while(id && p.events[id].instanceId){id=p.events[id].sourceId;owner=p.events[id].owner;}
   const key=id || uid();
   const event=id?structuredClone(p.events[id]):{name:'',desc:'',owner,scope,ownerPath:scope==='local'?currentOwnerPath(owner):null,conditions:newGroup(),causes:newGroup(),effects:[]};
   event.effectPaths??=event.effects.map(()=>null);
@@ -428,6 +430,15 @@ export function editEvent(owner,id=null,scope='local') {
     for(const n of leaves(draft.conditions))delete n.pick;
     next.events[key]=draft;
     for(const [target] of nextTargets) {
+      const dest=next.events[target];
+      if(dest.instanceId){
+        if(original.includes(target) && !outgoing.has(target)){
+          if(!dest.additionalCauses?.includes(key))return notice('Эта связь задана в основе целевого события.');
+          dest.additionalCauses=dest.additionalCauses.filter(k=>k!==key);
+        }
+        if(!original.includes(target) && outgoing.has(target))(dest.additionalCauses??=[]).push(key);
+        continue;
+      }
       if(original.includes(target) && !outgoing.has(target))removeCause(next.events[target].causes,key,true);
       if(!original.includes(target) && outgoing.has(target))addCause(next.events[target],key);
     }
@@ -458,7 +469,7 @@ export function editEvent(owner,id=null,scope='local') {
       visualTree('＋ Смена состояния',{multiple:false,stateMode:true,eligible:()=>true,apply:(route,key)=>{event.effects.push(key);event.effectPaths.push(route);draw();}}),
       eventPicker('＋ Событие',id=>{outgoing.add(id);draw();},id=>id!==key && !outgoing.has(id)),
       footer(id?btn('Удалить событие',()=>deleteObj('events',id),'danger'):null,el('button',{class:'primary',type:'submit'},'Сохранить правило')));
-    modal(id?'Редактировать событие':'Новое событие',form);
+    modal(inherited?'Правило основы · '+p.entities[owner].name:id?'Редактировать событие':'Новое событие',form);
     document.querySelector('dialog').scrollTop=scroll;
   }
   draw();

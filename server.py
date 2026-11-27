@@ -12,6 +12,7 @@ BASE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("DATA_DIR", BASE / "data"))
 DB = DATA / "editor.sqlite3"
 ASSETS = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
+          "/instances.js": ("instances.js", "text/javascript"),
           "/branch-text.js": ("branch-text.js", "text/javascript"),
           "/parameters.js": ("parameters.js", "text/javascript"),
           "/graph.js": ("graph.js", "text/javascript"), "/wires.js": ("wires.js", "text/javascript"), "/routes.js": ("routes.js", "text/javascript"), "/canvas.css": ("canvas.css", "text/css"), "/editor.js": ("editor.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
@@ -31,6 +32,27 @@ def validate(p):
             require(isinstance(obj["name"], str) and obj["name"].strip(), "Нужно название")
             require(isinstance(obj["desc"], str), "Нужно описание")
     require("root" in entities, "Нужна сущность проекта")
+    for key, entity in entities.items():
+        if "instanceOf" in entity:
+            source = entity["instanceOf"]
+            require(key != "root" and source in entities and source != "root" and
+                    "instanceOf" not in entities[source] and "instanceId" not in entities[source],
+                    "Неизвестная основа экземпляра")
+    for collection in (entities, states, events):
+        resolved = set()
+        for key, obj in collection.items():
+            if "instanceId" in obj:
+                require(obj["instanceId"] in entities and "instanceOf" in entities[obj["instanceId"]]
+                        and obj.get("sourceId") in collection and key != obj["sourceId"],
+                        "Потеряна связь экземпляра с основой")
+                chain = set()
+                source = key
+                while source not in resolved and "instanceId" in collection[source]:
+                    require(source not in chain, "Цикл в основах экземпляров")
+                    chain.add(source)
+                    source = collection[source]["sourceId"]
+                    require(source in collection, "Неизвестная основа")
+                resolved.update(chain)
     visited, active = set(), set()
 
     def coordinates(positions, allowed):
@@ -95,6 +117,8 @@ def validate(p):
             coordinates(layout, events if kind == "events" else (i for i, obj in states.items() if obj["owner"] == key))
         for child in children:
             visit(child)
+        if "instanceOf" in entities[key]:
+            visit(entities[key]["instanceOf"])
         active.remove(key)
         visited.add(key)
 
@@ -194,6 +218,10 @@ def validate(p):
             raise ValueError("Неверный блок правила")
 
     for event in events.values():
+        if "additionalCauses" in event:
+            extra = event["additionalCauses"]
+            require("instanceId" in event and isinstance(extra, list) and
+                    all(k in events for k in extra), "Неизвестная причина события экземпляра")
         require(event.get("scope") in (None, "local", "global"), "Неизвестный тип события")
         require(event.get("scope") != "global" or event["owner"] == "root", "Глобальное событие принадлежит проекту")
         check_path(event.get("ownerPath"), event["owner"])
