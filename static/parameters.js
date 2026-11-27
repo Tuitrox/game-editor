@@ -6,10 +6,10 @@ export function changeText(project,change){
   return project.entities[change.owner].parameters[change.ref].name+' · '+changeDirections[change.direction];
 }
 
-export function parameterTest(project, rule) {
+export function parameterTest(project, rule, displayName) {
   const param = project.entities[rule.owner].parameters[rule.ref];
   let value = rule.value === 'constant' ? 'Константа' : rule.value + '%';
   if (param.type === 'string') value = '«' + rule.value + '»';
   if (param.type === 'boolean') value = rule.value ? 'Да' : 'Нет';
-  return param.name + ' ' + comparisons[rule.compare] + ' ' + value;
+  return (displayName ?? param.name) + ' ' + comparisons[rule.compare] + ' ' + value;
 }

@@ -12,6 +12,7 @@ BASE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("DATA_DIR", BASE / "data"))
 DB = DATA / "editor.sqlite3"
 ASSETS = {"/": ("index.html", "text/html"), "/app.js": ("app.js", "text/javascript"),
+          "/branch-text.js": ("branch-text.js", "text/javascript"),
           "/parameters.js": ("parameters.js", "text/javascript"),
           "/graph.js": ("graph.js", "text/javascript"), "/wires.js": ("wires.js", "text/javascript"), "/routes.js": ("routes.js", "text/javascript"), "/canvas.css": ("canvas.css", "text/css"), "/editor.js": ("editor.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
 

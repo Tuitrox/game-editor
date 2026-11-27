@@ -3,6 +3,7 @@ import {editEvent, leaves, describeRule, removeCause, triggers, ruleReference, p
 import {projectGraph, layoutGraph, upstream} from './graph.js';
 import {wireLayer} from './wires.js';
 import {entityRoutes, pathLabel} from './routes.js';
+import {branchText} from './branch-text.js';
 import {parameterTypes, parameterTest, changeText} from './parameters.js';
 const $ = s => document.querySelector(s);
 export function el(tag, props = {}, ...kids) {
@@ -78,10 +79,16 @@ function validView(view){
     (!i || p.entities[view.path[i-1]].children.includes(id))) &&
     (!view.stateCanvas || p.states[view.stateCanvas]?.owner===view.path.at(-1));
 }
-function go(id,route,viewTab=tab,state=null) {
+function go(id,route,viewTab=tab,state=null,revealScope=false) {
   const nextPath=route || pathTo(id);
-  if(path.join('/')===nextPath.join('/') && tab===viewTab && stateCanvas===state)return;
-  backStack.push(currentView());
+  const same=path.join('/')===nextPath.join('/') && tab===viewTab && stateCanvas===state;
+  if(!same)backStack.push(currentView());
+  if(revealScope){
+    expandedPaths.add('scope:'+nextPath.join('/'));
+    $('#scopeSearch').value='';
+    if(narrowScope.matches)scopeOpen=false;
+  }
+  if(same){if(revealScope)renderScope();return;}
   path=nextPath;tab=viewTab;stateCanvas=state;
   for(let i=1;i<path.length;i++)expandedPaths.add('scope:'+path.slice(0,i).join('/'));
   selectedNode=null;picked=null;entityDraft=null;$('#search').value='';
@@ -866,9 +873,7 @@ function scopeTree(){
       toggle.setAttribute('aria-label',(open?'Свернуть ':'Раскрыть ')+entity.name);row.append(toggle);
     }else row.append(el('span',{class:'scope-space'}));
     const select=btn(tab==='states' && id==='root'?'Весь проект':entity.name,()=>{
-      if(narrowScope.matches)scopeOpen=false;
-      if(key!==active || stateCanvas)go(id,route);
-      else renderScope();
+      go(id,route,tab,null,true);
       if(scopeOpen)tree.querySelector('[aria-current="true"]')?.focus({preventScroll:true});
       else $('#scopeToggle').focus();
     },'scope-name');
@@ -925,7 +930,23 @@ function render() {
     else if(tab==='entities')entityMap(board);
     else renderEventBoard(board);
   }
+  $('#actions').append(el('button',{type:'button',id:'exportText',onclick:showBranchText,title:'Показать текст выбранной ветки'},'В текст'));
   renderPool();
+}
+function showBranchText(){
+  const text=branchText(p,path,eventInBranch);
+  const preview=el('textarea',{class:'branch-text',readOnly:true,value:text,ariaLabel:'Текст выбранной ветки'});
+  const copy=btn('Скопировать',async()=>{
+    try{
+      await navigator.clipboard.writeText(text);
+    }catch{
+      preview.focus();preview.select();
+      try{if(document.execCommand('copy'))return notice('Текст скопирован.');}catch{}
+      return notice('Текст выделен. Скопируйте его сочетанием Ctrl+C или ⌘C.');
+    }
+    notice('Текст скопирован.');
+  },'primary');
+  modal('Текст ветки «'+p.entities[here()].name+'»',preview,footer(copy));
 }
 async function request(url,options) {
   const response=await fetch(url,options), result=await response.json();
